@@ -1,0 +1,339 @@
+#ifndef REF_STM32F4_RGB_H
+#define REF_STM32F4_RGB_H
+
+#include <cstdint>
+#include <tim.h>
+#include <math.h>
+
+#define MAX_LED 12
+#define USE_BRIGHTNESS 0
+#define PI               3.14159265358979f
+
+class RGB
+{
+private:
+    uint8_t LED_Data[MAX_LED][4];
+    uint8_t LED_Mod[MAX_LED][4];  // for brightness
+    uint32_t pwmData[(24*MAX_LED)+50];
+    uint16_t  effStep = 0;
+    uint16_t  breathStep = 0;   // 呼吸灯独立计步
+    uint16_t  flashStep = 0;    // 快闪/慢闪独立计步
+public:
+    uint8_t  data_sentflag = 0;
+
+    // ────────── 灯光模式编号（持久化到 EEPROM）──────────
+    //  0  = 关闭
+    //  1~7= 纯色（红橙黄绿青蓝紫）
+    //  8  = 自定义（纯色，用户指定 RGB）
+    //  9  = 彩虹流水
+    // 10  = 呼吸灯（白色）
+    // 11  = 自动模式（由 autoSubState 驱动）
+    enum Rgb_style_t
+    {
+        MODE_OFF      = 0,
+        MODE_RED      = 1,
+        MODE_ORANGE   = 2,
+        MODE_YELLOW   = 3,
+        MODE_GREEN    = 4,
+        MODE_CYAN     = 5,
+        MODE_BLUE     = 6,
+        MODE_PURPLE   = 7,
+        MODE_CUSTOM   = 8,
+        MODE_RAINBOW  = 9,
+        MODE_BREATH   = 10,
+        MODE_AUTO     = 11,
+        // ---- 以下为自动模式子效果，不暴露给用户 ----
+        _AUTO_STANDBY       = 100,  // 白色呼吸灯
+        _AUTO_WORKING       = 101,  // 绿色常亮
+        _AUTO_COMPLETE      = 102,  // 青色慢闪（短周期呼吸）
+        _AUTO_ESTOP         = 103,  // 红色线性快闪
+        _AUTO_PAUSED        = 104,  // 黄色流水灯（彩虹变体）
+    };
+
+    // 自动模式的子状态标识
+    enum AutoSubState
+    {
+        AUTO_STANDBY  = 1,  // 待机
+        AUTO_WORKING  = 2,  // 工作
+        AUTO_COMPLETE = 3,  // 完成
+        AUTO_ESTOP    = 4,  // 急停
+        AUTO_PAUSED   = 5,  // 暂停
+    };
+
+    volatile AutoSubState autoSubState = AUTO_STANDBY;
+
+    // 自定义模式的纯色 RGB（通过 !RGB_CUSTOM r g b 设置）
+    uint8_t customR = 100, customG = 100, customB = 100;
+
+    RGB(uint8_t mode=0);
+
+    void Run(Rgb_style_t _mode = MODE_RAINBOW);
+
+    void Interrupt(uint8_t flag);
+
+    // 切换效果时重置所有计步器，避免残留相位导致视觉跳变
+    void ResetEffectSteps() { effStep = 0; breathStep = 0; flashStep = 0; }
+
+    //functions
+    void Set_LED (uint8_t LEDs, uint8_t Red, uint8_t Green, uint8_t Blue)
+    {
+        LED_Data[LEDs][0] = LEDs;
+        LED_Data[LEDs][1] = Green;
+        LED_Data[LEDs][2] = Red;
+        LED_Data[LEDs][3] = Blue;
+    }
+
+    void Set_Brightness (int brightness)  // 0-45
+    {
+#if USE_BRIGHTNESS
+
+        if (brightness > 45) brightness = 45;
+        for (int i=0; i<MAX_LED; i++)
+        {
+            LED_Mod[i][0] = LED_Data[i][0];
+            for (int j=1; j<4; j++)
+            {
+                float angle = 105-brightness;  // in degrees
+                angle = angle*PI / 180;  // in rad
+                LED_Mod[i][j] = (LED_Data[i][j])/(tan(angle));
+            }
+        }
+
+#endif
+
+    }
+
+    void WS2812_Send (void)
+    {
+        uint32_t indx=0;
+        uint32_t color;
+        HAL_StatusTypeDef ret;
+
+        for (int i= 0; i<MAX_LED; i++)
+        {
+#if USE_BRIGHTNESS
+            color = ((LED_Mod[i][1]<<16) | (LED_Mod[i][2]<<8) | (LED_Mod[i][3]));
+#else
+            color = ((LED_Data[i][1]<<16) | (LED_Data[i][2]<<8) | (LED_Data[i][3]));
+#endif
+            for (int i=23; i>=0; i--)
+            {
+                //1 timing
+                if (color&(1<<i))
+                {
+                    pwmData[indx] = 70;  // 2/3 of 105
+                }
+                //0 timing
+                else pwmData[indx] = 30;  // 1/3 of 105
+                indx++;
+            }
+
+        }
+
+        //for reset between two data cycle
+        for (int i=0; i<30; i++)
+        {
+            pwmData[indx] = 0;
+            indx++;
+        }
+
+        ret = HAL_TIM_PWM_Start_DMA(&htim2, TIM_CHANNEL_4, pwmData, indx);
+        if (ret != HAL_OK) {
+            data_sentflag = 0;
+            return;
+        }
+        while (!data_sentflag){};
+        data_sentflag = 0;
+    }
+
+    void RainBow()
+    {
+        float factor1, factor2;
+        uint16_t ind;
+        for(uint16_t j=0;j<MAX_LED;j++) {
+            ind = effStep + j * 1;
+            switch((int)((ind % 12) / 4)) {
+                case 0: factor1 = 1.0 - ((float)(ind % 12 - 0 * 4) / 4);
+                    factor2 = (float)((int)(ind - 0) % 12) / 4;
+                    Set_LED(j, 255 * factor1 + 0 * factor2, 0 * factor1 + 255 * factor2, 0 * factor1 + 0 * factor2);
+                    break;
+                case 1: factor1 = 1.0 - ((float)(ind % 12 - 1 * 4) / 4);
+                    factor2 = (float)((int)(ind - 4) % 12) / 4;
+                    Set_LED(j, 0 * factor1 + 0 * factor2, 255 * factor1 + 0 * factor2, 0 * factor1 + 255 * factor2);
+                    break;
+                case 2: factor1 = 1.0 - ((float)(ind % 12 - 2 * 4) / 4);
+                    factor2 = (float)((int)(ind - 8) % 12) / 4;
+                    Set_LED(j, 0 * factor1 + 255 * factor2, 0 * factor1 + 0 * factor2, 255 * factor1 + 0 * factor2);
+                    break;
+            }
+        }
+        WS2812_Send();  // 所有 LED 设置完后再发送
+        if(effStep >= 12) {effStep = 0; }
+        else effStep++;
+    }
+
+    void Sequence() {
+        //define your color style here
+    }
+
+    void Blink()
+    {
+        uint8_t e,r,g,b;
+        if(effStep < 44) {
+            for(uint16_t j=0;j<MAX_LED;j++)
+            {
+                Set_LED(j, 0, 0, 0);
+            }
+        }
+        else if(effStep  < 46) {
+            e = (effStep * 5) - 220;
+            r = 255 * ( e / 10 ) + 0 * ( 1.0 - e / 10 );
+            g = 255 * ( e / 10 ) + 0 * ( 1.0 - e / 10 );
+            b = 255 * ( e / 10 ) + 0 * ( 1.0 - e / 10 );
+            for(uint16_t j=0;j<12;j++)
+                if((j%1)==0)
+                {
+                    Set_LED(j, r, g, b);
+                }
+                else
+                {
+                    Set_LED(j, 0, 0, 0);
+                }
+        }
+        else if(effStep < 53.6) {
+            for(uint16_t j=0;j<MAX_LED;j++)
+                if((j%1)==0)
+                {
+                    Set_LED(j, 255, 255, 255);
+                }
+                else
+                {
+                    Set_LED(j, 0, 0, 0);
+                }
+        }
+        else if(effStep < 55.6) {
+            e = (effStep * 5) - 268;
+            r = 0 * ( e / 10 ) + 255 * ( 1.0 - e / 10 );
+            g = 0 * ( e / 10 ) + 255 * ( 1.0 - e / 10 );
+            b = 0 * ( e / 10 ) + 255 * ( 1.0 - e / 10 );
+            for(uint16_t j=0;j<MAX_LED;j++)
+                if((j%1)==0)
+                {
+                    Set_LED(j, r, g, b);
+                }
+                else
+                {
+                    Set_LED(j, 0, 0, 0);
+                }
+        }
+        else {
+            for(uint16_t j=0;j<MAX_LED;j++)
+            {
+                Set_LED(j, 0, 0, 0);
+            }
+        }
+        WS2812_Send();  // 所有 LED 设置完后再发送
+        if(effStep >= 75.6) {effStep = 0; }
+        else effStep++;
+    }
+
+    void Fade() {
+        uint8_t r,g,b;
+        double e;
+        e = (effStep * 20) / (double)703;
+        r = ( e ) * 255 + 0 * ( 1.0 - e );
+        g = ( e ) * 255 + 0 * ( 1.0 - e );
+        b = ( e ) * 255 + 0 * ( 1.0 - e );
+        for(uint16_t j=0;j<MAX_LED;j++) {
+            if((j % 1) == 0)
+            {
+                Set_LED(j, r, g, b);
+            }
+            else
+            {
+                Set_LED(j, 0, 0, 0);
+            }
+        }
+        WS2812_Send();  // 所有 LED 设置完后再发送
+        if(effStep >= 35.15) {effStep = 0; }
+        else effStep++;
+    }
+
+    // 通用纯色：按 RGB 值全部填充
+    void SolidColor(uint8_t r, uint8_t g, uint8_t b) {
+        for(uint16_t j=0;j<MAX_LED;j++) {
+            Set_LED(j, r, g, b);
+        }
+        WS2812_Send();
+    }
+
+    void PureColor(Rgb_style_t color) {
+        switch (color){
+            case MODE_RED:     SolidColor(100, 0, 0);     break;
+            case MODE_ORANGE:  SolidColor(100, 40, 0);    break;
+            case MODE_YELLOW:  SolidColor(100, 100, 0);   break;
+            case MODE_GREEN:   SolidColor(0, 100, 0);     break;
+            case MODE_CYAN:    SolidColor(0, 100, 100);   break;
+            case MODE_BLUE:    SolidColor(0, 0, 100);     break;
+            case MODE_PURPLE:  SolidColor(60, 0, 100);    break;
+            default:           SolidColor(0, 0, 0);       break;
+        }
+    }
+
+    // 呼吸灯效果（可指定颜色 RGB，周期由 period 控制，period 越大越慢）
+    void BreathEffect(uint8_t r, uint8_t g, uint8_t b, uint16_t period = 120) {
+        // 正弦曲线亮度：0 → 1 → 0
+        float phase = (float)breathStep / (float)period;
+        float brightness = (sinf(phase * 2.0f * PI - PI / 2.0f) + 1.0f) / 2.0f;
+        uint8_t rr = (uint8_t)(r * brightness);
+        uint8_t gg = (uint8_t)(g * brightness);
+        uint8_t bb = (uint8_t)(b * brightness);
+        SolidColor(rr, gg, bb);
+        breathStep++;
+        if (breathStep >= period) breathStep = 0;
+    }
+
+    // 线性快闪（急停用）：线性三角波，不是突然开关
+    void LinearFlash(uint8_t r, uint8_t g, uint8_t b, uint16_t period = 30) {
+        float phase = (float)flashStep / (float)period;
+        // 三角波：0→1→0 线性
+        float brightness;
+        if (phase < 0.5f)
+            brightness = phase * 2.0f;
+        else
+            brightness = 2.0f - phase * 2.0f;
+        uint8_t rr = (uint8_t)(r * brightness);
+        uint8_t gg = (uint8_t)(g * brightness);
+        uint8_t bb = (uint8_t)(b * brightness);
+        SolidColor(rr, gg, bb);
+        flashStep++;
+        if (flashStep >= period) flashStep = 0;
+    }
+
+    // 慢闪（完成状态用）：复用呼吸灯，周期更短以区分待机
+    void SlowFlash(uint8_t r, uint8_t g, uint8_t b) {
+        BreathEffect(r, g, b, 60);  // 周期 60 < 呼吸灯 120
+    }
+
+    // 黄色流水灯（暂停用）：复用彩虹逻辑但限定为黄色系
+    void YellowFlow() {
+        for(uint16_t j=0; j<MAX_LED; j++) {
+            uint16_t ind = (effStep + j) % MAX_LED;
+            // 只有一颗灯高亮黄色，其余暗黄
+            if (ind == 0) {
+                Set_LED(j, 120, 100, 0);
+            } else if (ind == 1 || ind == MAX_LED - 1) {
+                Set_LED(j, 50, 40, 0);
+            } else {
+                Set_LED(j, 10, 8, 0);
+            }
+        }
+        WS2812_Send();
+        effStep++;
+        if (effStep >= MAX_LED) effStep = 0;
+    }
+
+};
+
+#endif //REF_STM32F4_RGB_H
+
