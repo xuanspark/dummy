@@ -79,7 +79,7 @@ private:
     static int32_t CycleDataAverage(const uint16_t* _data, uint16_t _length, int32_t _cyc);
 
 
-    /***** Port Specified Implements *****/
+    /***** 需由平台实现的接口 *****/
     virtual void BeginWriteFlash() = 0;
     virtual void EndWriteFlash() = 0;
     virtual void ClearFlash() = 0;

@@ -33,7 +33,7 @@ public:
 
     int process_packet(const uint8_t *buffer, size_t length) override
     {
-        // cannot send partial packets
+        // 不能发部分包（USB CDC 以包为单位）
         if (length > USB_TX_DATA_SIZE)
             return -1;
         // 等 USB IN 端点空闲。原版用 PROTOCOL_SERVER_TIMEOUT_MS=10ms：单次 IN
@@ -51,7 +51,7 @@ public:
             return -1;
         }
 
-        // transmit packet
+        // 发送包
         uint8_t status = CDC_Transmit_FS(const_cast<uint8_t *>(buffer), length, endpoint_pair_);
         if (status != USBD_OK)
         {
@@ -68,7 +68,7 @@ private:
     const osSemaphoreId &sem_usb_tx_;
 };
 
-// Note we could have independent semaphores here to allow concurrent transmission
+// 注意：这里可以为两个发送器使用独立信号量以允许并发发送，当前共用一个
 USBSender usb_packet_output_cdc(CDC_OUT_EP, sem_usb_tx);
 USBSender usb_packet_output_native(ODRIVE_OUT_EP, sem_usb_tx);
 
@@ -82,7 +82,7 @@ public:
 
     int process_bytes(const uint8_t *buffer, size_t length, size_t *processed_bytes)
     {
-        // Loop to ensure all bytes get sent
+        // 循环以保证多个分包都能发出
         while (length)
         {
             size_t chunk = length < USB_TX_DATA_SIZE ? length : USB_TX_DATA_SIZE;
@@ -105,8 +105,8 @@ private:
     PacketSink &output_;
 } usb_stream_output(usb_packet_output_cdc);
 
-// This is used by the printf feature. Hence the above statics, and below seemingly random ptr (it's externed)
-// TODO: less spaghetti code
+// 被 printf 重定向机制使用。上面那些静态对象与下面看似随意的指针（被 extern 出去）准为此服务。
+// TODO: 重构以减少肠面代码
 StreamSink *usbStreamOutputPtr = &usb_stream_output;
 
 BidirectionalPacketBasedChannel usb_channel(usb_packet_output_native);
@@ -122,8 +122,8 @@ struct USBInterface
     USBSender &usb_sender;
 };
 
-// Note: statics make this less modular.
-// Note: we use a single rx semaphore and loop over data_pending to allow a single pump loop thread
+// 注意：静态对象让这里不够模块化。
+// 注意：使用单一 RX 信号量 + 轮询 data_pending 使单一泵循环线程能处理两个接口。
 static USBInterface CDC_interface = {
     .rx_buf = nullptr,
     .rx_len = 0,
@@ -147,13 +147,13 @@ static void UsbServerTask(void *ctx)
 
     for (;;)
     {
-        // const uint32_t usb_check_timeout = 1; // ms
+        // const uint32_t usb_check_timeout = 1; // 毫秒
         osStatus sem_stat = osSemaphoreAcquire(sem_usb_rx, osWaitForever);
         if (sem_stat == osOK)
         {
             usb_stats_.rx_cnt++;
 
-            // CDC Interface
+            // CDC 接口（ASCII 命令路径）
             if (CDC_interface.data_pending)
             {
                 CDC_interface.data_pending = false;
@@ -165,24 +165,24 @@ static void UsbServerTask(void *ctx)
                 if (snap_len > sizeof(cdc_snapshot)) snap_len = sizeof(cdc_snapshot);
                 std::memcpy(cdc_snapshot, CDC_interface.rx_buf, snap_len);
 
-                USBD_CDC_ReceivePacket(&hUsbDeviceFS, CDC_interface.out_ep);  // Allow next packet EARLY
+                USBD_CDC_ReceivePacket(&hUsbDeviceFS, CDC_interface.out_ep);  // 提前释放下一包接收
 
                 ASCII_protocol_parse_stream(cdc_snapshot, snap_len, usb_stream_output);
             }
 
-            // Native Interface
+            // Native 接口（fibre 二进制路径）
             if (ODrive_interface.data_pending)
             {
                 ODrive_interface.data_pending = false;
                 usb_channel.process_packet(ODrive_interface.rx_buf, ODrive_interface.rx_len);
-                USBD_CDC_ReceivePacket(&hUsbDeviceFS, ODrive_interface.out_ep);  // Allow next packet
+                USBD_CDC_ReceivePacket(&hUsbDeviceFS, ODrive_interface.out_ep);  // 释放下一包接收
             }
         }
     }
 }
 
-// Called from CDC_Receive_FS callback function, this allows the communication
-// thread to handle the incoming data
+// 由 CDC_Receive_FS 回调调用。只负责“记录 + 唤醒 UsbServerTask”，
+// 以使该线程在 RTOS 上下文里处理该数据（避免中断中跳转重逻辑）。
 void usb_rx_process_packet(uint8_t *buf, uint32_t len, uint8_t endpoint_pair)
 {
     USBInterface *usb_iface;
@@ -209,8 +209,8 @@ void usb_rx_process_packet(uint8_t *buf, uint32_t len, uint8_t endpoint_pair)
             dummy.robotState = DummyRobot::STATE_EMERGENCY_STOP;
     }
 
-    // We don't allow the next USB packet until the previous one has been processed completely.
-    // Therefore it's safe to write to these vars directly since we know previous processing is complete.
+    // 在上一个包被处理完之前，下一个 USB 包不会进入。
+    // 因此直接写这几个变量是安全的（上个处理已结束）。
     usb_iface->rx_buf = buf;
     usb_iface->rx_len = len;
     usb_iface->data_pending = true;
@@ -226,6 +226,6 @@ const osThreadAttr_t usbServerTask_attributes = {
 
 void StartUsbServer()
 {
-    // Start USB communication thread
+    // 启动 USB 服务线程
     usbServerTaskHandle = osThreadNew(UsbServerTask, nullptr, &usbServerTask_attributes);
 }

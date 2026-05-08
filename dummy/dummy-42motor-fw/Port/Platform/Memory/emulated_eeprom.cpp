@@ -1,3 +1,9 @@
+// ============================================================================
+//  emulated_eeprom.cpp —— Flash 模拟 EEPROM 实现（42 子板，STM32F1xx）
+// ----------------------------------------------------------------------------
+//  - F1 系列按 1 KB 页擦写，最后一页用作 EEPROM 区
+//  - eeprom_buffer_fill / flush 由 EEPROM 类调用
+// ============================================================================
 #ifndef __STM32_EEPROM_HPP
 #define __STM32_EEPROM_HPP
 
@@ -9,11 +15,11 @@ extern "C" {
 
 #endif
 
-/* Be able to change FLASH_BANK_NUMBER to use if relevant */
+/* 可在需要时修改 FLASH_BANK_NUMBER */
 #if !defined(FLASH_BANK_NUMBER) && \
     (defined(STM32F0xx) || defined(STM32F1xx) || defined(STM32G4xx) || \
      defined(STM32H7xx) || defined(STM32L4xx) || defined(STM32L5xx))
-/* For STM32F0xx, FLASH_BANK_1 is not defined only FLASH_BANK1_END is defined */
+/* STM32F0xx 未定义 FLASH_BANK_1，只定义了 FLASH_BANK1_END */
 #if defined(STM32F0xx)
 #define FLASH_BANK_1 1U
 #endif
@@ -27,7 +33,7 @@ extern "C" {
 #endif
 #endif /* !FLASH_BANK_NUMBER */
 
-/* Be able to change FLASH_DATA_SECTOR to use if relevant */
+/* 可在需要时修改 FLASH_DATA_SECTOR */
 #if defined(STM32F2xx) || defined(STM32F4xx) || defined(STM32F7xx) || \
     defined(STM32H7xx)
 #if !defined(FLASH_DATA_SECTOR)
@@ -39,14 +45,14 @@ extern "C" {
 #endif /* !FLASH_DATA_SECTOR */
 #endif /* STM32F2xx || STM32F4xx || STM32F7xx */
 
-/* Be able to change FLASH_PAGE_NUMBER to use if relevant */
+/* 可在需要时修改 FLASH_PAGE_NUMBER */
 #if !defined(FLASH_PAGE_NUMBER) && \
     (defined (STM32G0xx) || defined(STM32G4xx) || defined (STM32L4xx) || \
      defined (STM32L5xx) || defined(STM32WBxx))
 #define FLASH_PAGE_NUMBER   ((uint32_t)((FLASH_SIZE / FLASH_PAGE_SIZE) - 1))
 #endif /* !FLASH_PAGE_NUMBER */
 
-/* Be able to change FLASH_END to use */
+/* 可在需要时修改 FLASH_END */
 #if !defined(FLASH_END)
 #if defined (STM32F0xx) || defined (STM32F1xx)
 #if defined (FLASH_BANK2_END) && (FLASH_BANK_NUMBER == FLASH_BANK_2)
@@ -83,7 +89,7 @@ static inline uint32_t get_flash_end(void)
 #define FLASH_END  get_flash_end()
 #elif defined(STM32G0xx) || defined(STM32G4xx) || defined (STM32L4xx) || \
       defined (STM32L5xx) || defined(STM32WBxx)
-/* If FLASH_PAGE_NUMBER is defined by user, this is not really end of the flash */
+/* 若用户自定义了 FLASH_PAGE_NUMBER，这个并不是 Flash 的真正末端 */
 #define FLASH_END  ((uint32_t)(FLASH_BASE + (((FLASH_PAGE_NUMBER +1) * FLASH_PAGE_SIZE))-1))
 #elif defined(EEPROM_RETRAM_MODE)
 #define FLASH_END  ((uint32_t)(EEPROM_RETRAM_START_ADDRESS + EEPROM_RETRAM_MODE_SIZE -1))
@@ -95,12 +101,11 @@ static inline uint32_t get_flash_end(void)
 #endif
 #endif /* FLASH_END */
 
-/* Be able to change FLASH_BASE_ADDRESS to use */
+/* 可在需要时修改 FLASH_BASE_ADDRESS */
 #ifndef FLASH_BASE_ADDRESS
 /*
- * By default, Use the last page of the flash to store data
- * in order to prevent overwritting
- * program data
+ * 默认使用 Flash 的最后一页存放数据，
+ * 以避免覆写程序代码区。
  */
 #if defined(EEPROM_RETRAM_MODE)
 #define FLASH_BASE_ADDRESS  EEPROM_RETRAM_START_ADDRESS
@@ -126,7 +131,7 @@ uint8_t eeprom_read_byte(const uint32_t pos)
 #if defined(DATA_EEPROM_BASE)
     __IO uint8_t data = 0;
     if (pos <= (DATA_EEPROM_END - DATA_EEPROM_BASE)) {
-      /* with actual EEPROM, pos is a relative address */
+      /* 含集成 EEPROM 的芯片，pos 是相对 EEPROM 起始的偏移 */
       data = *(__IO uint8_t *)(DATA_EEPROM_BASE + pos);
     }
     return (uint8_t)data;
@@ -145,7 +150,7 @@ uint8_t eeprom_read_byte(const uint32_t pos)
 void eeprom_write_byte(uint32_t pos, uint8_t value)
 {
 #if defined(DATA_EEPROM_BASE)
-    /* with actual EEPROM, pos is a relative address */
+    /* 含集成 EEPROM 的芯片，pos 是相对 EEPROM 起始的偏移 */
     if (pos <= (DATA_EEPROM_END - DATA_EEPROM_BASE)) {
       if (HAL_FLASHEx_DATAEEPROM_Unlock() == HAL_OK) {
         HAL_FLASHEx_DATAEEPROM_Program(FLASH_TYPEPROGRAMDATA_BYTE, (pos + DATA_EEPROM_BASE), (uint32_t)value);
@@ -222,7 +227,7 @@ void eeprom_buffer_flush(void)
     uint32_t pageError = 0;
     uint64_t data = 0;
 
-    /* ERASING page */
+    /* 抹除一个页（与芯片系列相关） */
     EraseInitStruct.TypeErase = FLASH_TYPEERASE_PAGES;
 #if defined (STM32F1xx) || defined (STM32G4xx) || defined (STM32L4xx) || \
     defined (STM32L5xx)
@@ -271,7 +276,7 @@ void eeprom_buffer_flush(void)
     uint32_t data = 0;
 #endif
 
-    /* ERASING page */
+    /* 抹除一个扇区（F2/F4/F7/H7 系列按扇区擦写） */
     EraseInitStruct.TypeErase = FLASH_TYPEERASE_SECTORS;
 #if defined(STM32H7xx)
     EraseInitStruct.Banks = FLASH_BANK_NUMBER;
@@ -318,4 +323,4 @@ void eeprom_buffer_flush(void)
 #endif
 #endif
 
-/************************ (C) COPYRIGHT STMicroelectronics *****END OF FILE****/
+/************************ (C) COPYRIGHT STMicroelectronics — 文件结束 ****/

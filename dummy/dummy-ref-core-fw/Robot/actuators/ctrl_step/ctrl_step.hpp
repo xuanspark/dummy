@@ -1,3 +1,11 @@
+// ============================================================================
+//  ctrl_step.hpp —— CAN 步进电机节点抽象
+// ----------------------------------------------------------------------------
+//  - 定义 ref 主控侧访问 35/42 电机子板的高层接口
+//  - 统一角度单位、减速比、方向反转和软限位边界
+//  - 暴露 Fibre 调试接口，便于上位机实时读取和下发参数
+// ============================================================================
+
 #ifndef DUMMY_CORE_FW_CTRL_STEP_HPP
 #define DUMMY_CORE_FW_CTRL_STEP_HPP
 
@@ -28,6 +36,8 @@ public:
     bool inverseDirection;
     uint8_t reduction;
     State state = STOP;
+    // 子板最近一次回调上报的堵转标志（35hand 在 0x23 回包 byte[5] 填，老 35motor/42motor 该位为 0）
+    volatile bool isStalled = false;
 
     void SetAngle(float _angle);
     void SetAngleWithVelocityLimit(float _angle, float _vel);
@@ -76,7 +86,7 @@ public:
     void EraseConfigs();
 
     void UpdateAngle();
-    void UpdateAngleCallback(float _pos, bool _isFinished);
+    void UpdateAngleCallback(float _pos, bool _isFinished, bool _isStalled = false);
 
 
     // Communication protocol definitions

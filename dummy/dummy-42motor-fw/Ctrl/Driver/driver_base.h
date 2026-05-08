@@ -1,3 +1,10 @@
+// ============================================================================
+//  driver_base.h —— 步进电机驱动抽象基类
+// ----------------------------------------------------------------------------
+//  - 派生类（如 TB67H450Base）实现具体 H 桥控制
+//  - SetFocCurrentVector: 由 Motor::Controller 调用，输入"方向 + 电流"
+//  - 其他接口：使能 / 失能 / 电流斜率 / 制动等
+// ============================================================================
 #ifndef CTRL_STEP_FW_DRIVER_BASE_H
 #define CTRL_STEP_FW_DRIVER_BASE_H
 
@@ -10,9 +17,9 @@ public:
     virtual void Init() = 0;
 
     /*
-     * FOC current vector direction is described as counts, that means
+     * FOC 电流矢量方向以计数表示，涵义如下：
      * we divide a 360° circle into N counts, and _directionInCount is
-     * between (0 ~ N-1), and after calculation the current range is (0 ~ 3300mA)
+     * 取值范围 (0 ~ N-1)，计算后电流范围为 (0 ~ 3300 mA)
      */
     virtual void SetFocCurrentVector(uint32_t _directionInCount, int32_t _current_mA) = 0;
 
@@ -22,7 +29,7 @@ public:
 
 
 protected:
-    // Used to composite the FOC current vector
+    // 合成 FOC 电流矢量（主接口）
     virtual void SetTwoCoilsCurrent(uint16_t _currentA_mA, uint16_t _currentB_mA) = 0;
 
     typedef struct

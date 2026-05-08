@@ -1,7 +1,16 @@
+// ============================================================================
+//  main.c —— ESP32 uart-bridge 主入口
+// ----------------------------------------------------------------------------
+//  启动流程：
+//   1. 挂载 SPIFFS（FS_ROOT）
+//   2. 读 wifi.json：有则依次尝试；全失败或未配置则进入 CLI 阅读串口命令
+//   3. 联网后启动 Mongoose HTTP 服务器（同时提供 WS/TCP/MQTT 桥接）
+//   4. 同一主循环内同时驱动 mg_mgr_poll 与 CLI，互不阻塞
+//
+//  接线：RX = GPIO27，TX = GPIO26（与 dummy 主控板 UART 连接）
+// ============================================================================
 // Copyright (c) 2020 Cesanta Software Limited
 // All rights reserved
-//gpio27 RX
-//gpio26 TX
 #include "main.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -18,6 +27,8 @@ void config_write(struct mg_str config) {
   mg_file_write(&mg_fs_posix, FS_ROOT "/config.json", config.ptr, config.len);
 }
 
+// run_cli：进入纯 CLI 模式（未配置 WiFi 或联网全失败时）。
+//   - 此处为阻塞循环，仅响应串口输入；需重启才能退出
 static void run_cli(void) {
   MG_INFO(("WiFi is not configured, running CLI. Press enter"));
   cli_init();
@@ -28,19 +39,20 @@ static void run_cli(void) {
   }
 }
 
+// app_main：ESP-IDF 应用入口
 void app_main(void) {
-  // Mount filesystem
+  // 挂载 SPIFFS，用于读写 WiFi 凭证 / 运行时配置
   esp_vfs_spiffs_conf_t conf = {
       .base_path = FS_ROOT, .max_files = 20, .format_if_mount_failed = true};
   int res = esp_vfs_spiffs_register(&conf);
   ESP_LOGI(TAG, "FS at %s initialised, status: %d", conf.base_path, res);
 
-  // Try to connect to wifi by using saved WiFi credentials
+  // 尝试使用保存的 WiFi 凭证联网（支持多个 SSID 依次尝试）
   char *json = mg_file_read(&mg_fs_posix, WIFI_FILE, NULL);
   if (json != NULL) {
     bool connected = false;
     if (json[0] == '[') {
-      // Array format: try each WiFi in order
+      // 数组格式：按顺序逐个尝试 [{ssid,pass}, ...]
       for (int i = 0; i < 5; i++) {
         char path[20];
         snprintf(path, sizeof(path), "$[%d].ssid", i);
@@ -59,7 +71,7 @@ void app_main(void) {
         if (pass) free(pass);
       }
     } else {
-      // Legacy single object format
+      // 历史格式：单个对象 {"ssid":...,"pass":...}
       char *ssid = mg_json_get_str(mg_str(json), "$.ssid");
       char *pass = mg_json_get_str(mg_str(json), "$.pass");
       if (ssid) connected = wifi_init(ssid, pass ? pass : "");
@@ -75,7 +87,7 @@ void app_main(void) {
     run_cli();  // Won't return until reboot
   }
 
-  // Connected to WiFi, now start HTTP server
+  // WiFi 已联上，启动 HTTP / WS / TCP / MQTT 服务器
   struct mg_mgr mgr;
   mg_mgr_init(&mgr);
   mg_log_set(MG_LL_DEBUG);  // Set log level
@@ -84,22 +96,20 @@ void app_main(void) {
 
   print_banner();
 
-  // Make CLI available while WiFi is online too. cli() is non-blocking
-  // (returns immediately on 0/0xFF), so we can drive it from the same loop
-  // that polls Mongoose without ever blocking the network event loop.
-  // Heuristic "reconnect detection": if the serial line has been idle for
-  // >= IDLE_RECONNECT_MS and a new byte arrives, treat it as a new terminal
-  // attaching and re-print the banner before processing the input.
+  // 联网后仍保留 CLI：cli() 是非阻塞的（0/0xFF 直接返回），
+  // 可与 mg_mgr_poll 同住在主循环中，不会阻塞网络事件循环。
+  // 启发式“重连检测”：串口空闲 ≥ IDLE_RECONNECT_MS 后再收到字节，
+  // 视为新终端接入，在处理输入前重新打印 banner。
   cli_init();
   const int64_t IDLE_RECONNECT_MS = 3000;
   int64_t last_rx_ms = esp_timer_get_time() / 1000;
   for (;;) {
     mg_mgr_poll(&mgr, 10);
-    int ch = getchar();        // non-blocking: returns EOF (-1) when idle
+    int ch = getchar();        // 非阻塞：空闲时返回 EOF (-1)
     if (ch != EOF) {
       int64_t now_ms = esp_timer_get_time() / 1000;
       if (now_ms - last_rx_ms >= IDLE_RECONNECT_MS) {
-        print_banner();        // serial reconnected after a quiet gap
+        print_banner();        // 长时间空闲后重新有输入，推测为重接串口
       }
       last_rx_ms = now_ms;
       cli((uint8_t) ch);
@@ -107,9 +117,9 @@ void app_main(void) {
   }
 }
 
+// print_banner：在串口控制台打印运行状态概要（IP / HTTP / TCP / WS 地址）。
 void print_banner(void) {
-  // Dedupe: when both the idle-reconnect heuristic and the explicit `info`
-  // command fire from a single user input, only print once.
+  // 去重：空闲重连启发与 `info` 命令可能同时触发，500 ms 内只打一次。
   static int64_t last_banner_ms = 0;
   int64_t now_ms = esp_timer_get_time() / 1000;
   if (now_ms - last_banner_ms < 500) return;

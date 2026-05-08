@@ -1,3 +1,6 @@
+// ============================================================================
+//  mt6816_base.cpp —— MT6816 抽象基类实现（35 步进版本，与 42motor 镜像）
+// ============================================================================
 #include "mt6816_base.h"
 
 bool MT6816Base::Init()
@@ -5,7 +8,7 @@ bool MT6816Base::Init()
     SpiInit();
     UpdateAngle();
 
-    // Check if the stored calibration data are valid
+    // 检查 Flash 中存的校准数据是否有效
     angleData.rectifyValid = true;
     for (uint32_t i = 0; i < RESOLUTION; i++)
     {

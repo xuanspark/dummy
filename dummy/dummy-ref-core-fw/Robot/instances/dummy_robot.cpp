@@ -1,3 +1,11 @@
+// ============================================================================
+//  dummy_robot.cpp —— Dummy 六轴机器人主状态机实现
+// ----------------------------------------------------------------------------
+//  - 管理 6 个关节电机、手爪、RGB 灯效、在线检测与运动命令队列
+//  - 实现 START/HOME/RESET/CLOSE、急停/暂停/恢复等系统级动作
+//  - 阻塞运动通过 SysCmdThread 异步执行，避免串口处理线程被长时间占用
+// ============================================================================
+
 #include "communication.hpp"
 #include "dummy_robot.h"
 #include "eeprom_interface.h"
@@ -307,10 +315,14 @@ void DummyRobot::SetEnable(bool _enable)
 
 void DummyRobot::Startup()
 {
-    // !START：使能机械臂 + 使能手爪
+    // !START：使能机械臂 + 使能手爪 + 自动闭合手爪
     SetEnable(true);
     if (hand2 != nullptr)
+    {
         hand2->SetEnable(true);
+        // 启动时自动闭合手爪（电流模式，与下方关节运动并行执行）
+        hand2->SetAngleWithCurrentLimit(1);
+    }
 
     // 读取当前实际关节角度
     UpdateJointAngles();
@@ -346,14 +358,45 @@ void DummyRobot::Startup()
 
 void DummyRobot::Shutdown()
 {
-    // !CLOSE：先回零点姿态，再失能（先回零避免失能后重力倒伏危险）
+    // !CLOSE 与 !START 对称：检测是否已在零点姿态（REST_POSE，容差 ±0.1°）
+    bool atRest = true;
     if (isEnabled)
+    {
+        UpdateJointAngles();
+        for (int j = 0; j < 6; j++)
+        {
+            if (fabsf(currentJoints.a[j] - REST_POSE.a[j]) > 0.1f)
+            {
+                atRest = false;
+                break;
+            }
+        }
+    }
+
+    // 关闭前先发起手爪闭合动作（电流模式，与下方关节运动并行）
+    if (hand2 != nullptr && hand2->isEnabled())
+        hand2->SetAngleWithCurrentLimit(1);
+
+    if (atRest)
+    {
+        // 已在零点姿态（或本来就失能）→ 短暂等待手爪闭合到位再失能
+        if (hand2 != nullptr && hand2->isEnabled())
+            osDelay(800);   // 等手爪夹紧到位
+        if (hand2 != nullptr)
+            hand2->SetEnable(false);
+        SetEnable(false);  // 内部会清 isHomed
+        SetRGBAutoSubState(RGB::AUTO_STANDBY);
+    }
+    else
+    {
+        // 不在零点 → 工作(绿) → 回零（期间手爪并行合上）→ 失能 → 完成(青，5s 后自动 → 白)
+        NotifyWorkStart();
         Resting();
-    if (hand2 != nullptr)
-        hand2->SetEnable(false);
-    SetEnable(false);  // 内部会清 isHomed
-    // RGB 自动模式：失能后进入待机
-    SetRGBAutoSubState(RGB::AUTO_STANDBY);
+        if (hand2 != nullptr)
+            hand2->SetEnable(false);
+        SetEnable(false);  // 内部会清 isHomed
+        NotifyWorkDone();   // → AUTO_COMPLETE → 5s → AUTO_STANDBY
+    }
 }
 
 
@@ -433,11 +476,11 @@ bool DummyRobot::PostSysCmd(SysCmd cmd, uint8_t channelType)
 
 void DummyRobot::OnHandActionRGBHook(bool _open)
 {
-    // 手爪开启 → 标识2（工作状态），关闭 → 标识3（完成状态）
-    if (_open)
-        NotifyWorkStart();
-    else
-        NotifyWorkDone();
+    // 手爪开/合都走完整流程：工作(绿) → 立即完成(青) → 5s 后自动回到待机(白)
+    // _open 参数保留以兼容现有接口，张开和闭合的灯光行为一致
+    (void)_open;
+    NotifyWorkStart();
+    NotifyWorkDone();
 }
 
 void DummyRobot::SetRGBEnable(bool _enable)

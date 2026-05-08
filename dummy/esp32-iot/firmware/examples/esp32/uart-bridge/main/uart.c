@@ -1,3 +1,10 @@
+// ============================================================================
+//  uart.c —— ESP-IDF UART1 驱动封装
+// ----------------------------------------------------------------------------
+//  - 为 net.c 提供 uart_init / uart_read / uart_write 三个业务接口
+//  - 默认 8N1、无流控，收发 FIFO 各 SOC_UART_FIFO_LEN*2
+//  - 发送末尾自动补 "\r\n"（使主控板 ASCII 协议按行解析）
+// ============================================================================
 #include "main.h"
 #include "esp_log.h"
 #include "soc/soc_caps.h"
@@ -8,6 +15,7 @@ int uart_close(int no) {
   return uart_driver_delete(no);
 }
 
+// uart_open：配置并安装 UART 驱动。cts/rts 传 -1 表示不使用硬件流控。
 int uart_open(int no, int rx, int tx, int cts, int rts, int baud) {
   uart_config_t uart_config = {
       .baud_rate = baud,
@@ -28,10 +36,13 @@ int uart_open(int no, int rx, int tx, int cts, int rts, int baud) {
   return no;
 }
 
+// uart_init：bridge 业务调用的入口，固定使用 UART_NO（UART1）不启用流控。
 void uart_init(int tx, int rx, int baud) {
+  uart_driver_delete(UART_NO);
   uart_open(UART_NO, rx, tx, -1, -1, baud);
 }
 
+// uart_read：从 UART1 FIFO 读取。无数据时立即返回 0；有数据时最多等待 10 ms。
 int uart_read(void *buf, size_t len) {
   size_t x = 0;
   int no = UART_NO;
@@ -41,6 +52,7 @@ int uart_read(void *buf, size_t len) {
   return n;
 }
 
+// uart_write：向 UART1 发送一段字节。若该段中未含 '\n'，末尾补一个 "\r\n"。
 int uart_write(const void *buf, size_t len) {
   int no = UART_NO;
   int ret;

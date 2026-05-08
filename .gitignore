@@ -38,8 +38,14 @@ host-pc/frontend/dev.err
 
 # ===== 文档和测试文件夹 =====
 MD/
-TEST/
-test/
+test/__pycache__/
+test/*.pyc
+test/*.pyo
+test/*.log
+test/*.tmp
+test/*.bak
+test/output/
+test/results/
 
 # ===== IDE 配置 =====
 .idea/
@@ -51,3 +57,9 @@ test/
 # ===== 系统文件 =====
 .DS_Store
 Thumbs.db
+
+# ===== 备份目录 / 临时快照（不进任何远端） =====
+test/
+dummy-backup/
+dummy.bak.*/
+__pycache__/

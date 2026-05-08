@@ -1,3 +1,11 @@
+// ============================================================================
+//  main.js —— uart-bridge Web UI 主脚本（Preact 单页应用）
+// ----------------------------------------------------------------------------
+//  - 通过 WebSocket (4002) 与 ESP32 进行 UART 双向通信
+//  - 提供 6 关节滑条、夹爪滑条、命令历史、状态着色、急停 / 暂停 / 恢复按钮
+//  - 已大量中文行内注释；本头块仅作总览
+//  - 改动后需重新打包：python pack_fs.py -o ../esp32/uart-bridge/main/packed_fs.c
+// ============================================================================
 'use strict';
 import {Component, h, html, render, useEffect, useState, useRef} from './preact.min.js';
 
@@ -18,10 +26,10 @@ const Message = m => html`<span
 // 根据响应文本判断颜色类型
 function classifyResponse(line) {
   if (!line) return 'recv';
-  // STATE 行（依状态关键词着色）
-  if (/STATE:Stoping/.test(line))  return 'estop';
-  if (/STATE:Pauseing/.test(line)) return 'paused';
-  if (/STATE:Normal/.test(line))   return 'resumed';
+  // STATUS 广播行依状态关键字着色
+  if (/STATUS:Stoping/.test(line))  return 'estop';
+  if (/STATUS:Pauseing/.test(line)) return 'paused';
+  if (/STATUS:Standby|STATUS:Running|STATUS:Complete/.test(line)) return 'resumed';
   // 失败类
   if (/\bError\b/.test(line))      return 'reject';
   // 成功类：'<Cmd> OK' / 'Move OK' / 'Q:' 等
@@ -58,8 +66,26 @@ const App = function(props) {
   const [j6txt, setj6Txt] = useState('0');
   const [velocity, setVelocity] = useState('10');
   const [handOpen, setHandOpen] = useState(false);
-  // 机器人状态：'unknown' | 'normal' | 'estop' | 'paused'
-  const [robotState, setRobotState] = useState('unknown');
+  // 机器人状态徽章 key：'idle'|'working'|'done'|'estop'|'paused'
+  //
+  // 三层架构（镜像固件事件驱动状态机）：
+  //   1) 严格守卫：transitionOnSend 按固件规则拒绝非法预测（如 estop 下 !PAUSE）
+  //   2) 乐观切换：合法预测立即应用于 displayedBadge（0 ms 响应）
+  //   3) 广播校验：STATUS:Xxx 到达时：匹配则 commit；不匹配则以广播为准纠正
+  //                   1500 ms 超时未收到广播 → 强制 commit预测值
+  const [committed, setCommitted] = useState('idle');         // 已确认状态
+  const [predicted, setPredicted] = useState(null);           // 乐观预测，500ms 内优先显示
+  const [inError, setInError] = useState(false);              // 错误弹窗期间徽章变“错误”（需手动点 OK 清除）
+  const predictedTsRef = useRef(0);
+  const commitTimerRef = useRef(null);
+  // 刚完成一段运动：5 秒内显示 “完成”（与固件 NotifyWorkDone 的 AUTO_COMPLETE 联动）
+  const [recentlyDone, setRecentlyDone] = useState(false);
+  const doneTimerRef = useRef(null);
+  const flashDone = () => {
+    if (doneTimerRef.current) clearTimeout(doneTimerRef.current);
+    setRecentlyDone(true);
+    doneTimerRef.current = setTimeout(() => setRecentlyDone(false), 5000);
+  };
   const [queueDepth, setQueueDepth] = useState(null);   // 队列剩余空位
   const [lastReject, setLastReject] = useState('');     // 最近一次拒绝信息
   const [curPos, setCurPos] = useState(null);
@@ -101,10 +127,14 @@ const App = function(props) {
       sock.onmessage = ev => {
         // STM32 以 \r\n 终结每行；一次 onmessage 可能含多行
         var lines = String(ev.data).split(/\r?\n/).filter(s => s.length > 0);
-        // Push every parsed line into the buffer; the 100ms flusher will
-        // commit them in one setState batch.
+        // 过滤元数据帧 —— 不进入控制台显示，仅供状态机使用：
+        //   ~CMD:/~END:    命令生命周期标记
+        //   STATUS:Xxx     状态广播（已驱动右上角徽章，控制台再显示一遍冗余）
         for (var i = 0; i < lines.length; i++) {
-          msgBufRef.current.push({data: lines[i], uart: true, type: classifyResponse(lines[i])});
+          var ln = lines[i];
+          if (ln.charAt(0) === '~') continue;
+          if (ln.startsWith('STATUS:')) continue;
+          msgBufRef.current.push({data: ln, uart: true, type: classifyResponse(ln)});
         }
         if (msgBufRef.current.length && msgFlushTimerRef.current == null) {
           msgFlushTimerRef.current = setTimeout(() => {
@@ -112,9 +142,14 @@ const App = function(props) {
             flushMessages();
           }, 100);
         }
+        // parseResponseLine 仍处理所有行（包括 ~CMD/~END）以驱动状态机
         for (var i = 0; i < lines.length; i++) parseResponseLine(lines[i]);
       };
       sock.onclose = function() {
+        // 断开后重置为待机，避免显示陈旧的“急停”状态误导。
+        setCommitted('idle');
+        setPredicted(null);
+        setQueueDepth(null);
         clearTimeout(tid);
         tid = setTimeout(reconnect, 1000);
         setConnected(false);
@@ -125,14 +160,32 @@ const App = function(props) {
     reconnect();
   };
 
-  // 解析单行响应，更新机器人状态 / 队列深度 / 位置
-  const STATE_MAP = {
-    Normal:   'normal',
+  // 状态名 → 徽章 key 映射（两个来源共用一张表）。
+  //  - STATUS:Xxx        主动广播（主要，5 值全覆盖）
+  //  - "... Error: state=Xxx" 拒收响应（仅 Stoping/Pauseing）
+  const STATUS_MAP = {
+    Standby:  'idle',
+    Running:  'working',
+    Complete: 'done',
     Stoping:  'estop',
     Pauseing: 'paused',
   };
   const parseResponseLine = (line) => {
     if (!line) return;
+
+    // 命令生命周期元数据帧（~CMD:/~END:）—— 只供状态机使用，不参与任何其他匹配。
+    // ~END 是 deterministic commit 信号：把乐观预测固化为 committed，清除超时计时器。
+    // STATUS 广播随后到达时仍可纠正（如 !START atRest 把 working 纠回 idle）。
+    if (line.charAt(0) === '~') {
+      if (line.startsWith('~END:')) {
+        setPredicted(curr => {
+          if (curr) setCommitted(curr);
+          return null;
+        });
+        if (commitTimerRef.current) { clearTimeout(commitTimerRef.current); commitTimerRef.current = null; }
+      }
+      return;
+    }
 
     // 位置查询: "GetJPos OK 0.00 -71.00 180.00 0.00 0.00 0.00 H:0"
     //            / "GetLPos OK x y z a b c H:0"
@@ -164,37 +217,50 @@ const App = function(props) {
       setQueueDepth(prev => prev === qv ? prev : qv);  // 去重，避免 20Hz 重渲染
     }
 
-    // STATE 行: "STATE:Normal QUEUE:15"
-    var stateMatch = line.match(/STATE:(\w+)/);
+    // 主动广播："STATUS:Running QUEUE:15"
     var queueMatch = line.match(/QUEUE:(\d+)/);
     if (queueMatch) {
-      var qv2 = parseInt(queueMatch[1]);
-      setQueueDepth(prev => prev === qv2 ? prev : qv2);
+      var qv = parseInt(queueMatch[1]);
+      setQueueDepth(prev => prev === qv ? prev : qv);
     }
-    if (stateMatch) {
-      var mapped = STATE_MAP[stateMatch[1]];
-      if (mapped) setRobotState(mapped);
+    // 【第 3 层】广播校验：STATUS:Xxx 是权威源。
+    var statusMatch = line.match(/STATUS:(\w+)/);
+    if (statusMatch) {
+      var bk = STATUS_MAP[statusMatch[1]];
+      if (bk) {
+        // 另记当前预测同名：成功 commit；不同名：预测错误，以广播为准
+        setCommitted(bk);
+        setPredicted(null);
+        if (commitTimerRef.current) { clearTimeout(commitTimerRef.current); commitTimerRef.current = null; }
+      }
     }
 
-    // 旧固件兼容：STATE:0/1/2 数字 + ESTOP|/PAUSED/RESUMED 关键字
-    var legacyState = line.match(/STATE:(\d+)/);
-    if (legacyState) {
-      var n = parseInt(legacyState[1]);
-      setRobotState(n === 0 ? 'normal' : (n === 1 ? 'estop' : (n === 2 ? 'paused' : 'unknown')));
+    // 错误响应附带："Move/Pause/Close Error: state=Stoping|Pauseing"
+    // 是固件拒收命令时顺便提供的状态查询，用于纠正 UI 错误猜测。
+    var errStateMatch = line.match(/state=(\w+)/);
+    if (errStateMatch) {
+      var ek = STATUS_MAP[errStateMatch[1]];
+      if (ek) {
+        setCommitted(ek);
+        setPredicted(null);
+        if (commitTimerRef.current) { clearTimeout(commitTimerRef.current); commitTimerRef.current = null; }
+      }
     }
-    if (/^ESTOP\|/.test(line))    setRobotState('estop');
-    else if (/^PAUSED\|/.test(line)) setRobotState('paused');
-    else if (/^RESUMED/.test(line))  setRobotState('normal');
 
-    // 单独的 ack（没有后续 STATE 行的）
-    if (line.startsWith('Start OK'))       { setRobotState('normal'); setLastReject(''); }
-    else if (line.startsWith('Home OK'))   { setRobotState('normal'); setLastReject(''); }
-    else if (line.startsWith('Reset OK'))  { setRobotState('normal'); }
-    else if (line.startsWith('Close OK'))  { setRobotState('normal'); }
+    // 单独的 ack（没有后续 STATUS 行的）。触发 “完成” 灯效。
+    if (line.startsWith('Start OK'))       { setLastReject(''); flashDone(); }
+    else if (line.startsWith('Home OK'))   { setLastReject(''); flashDone(); }
+    else if (line.startsWith('Reset OK'))  { flashDone(); }
+    else if (line.startsWith('Close OK'))  { flashDone(); }
+    else if (line.startsWith('Move OK'))   { flashDone(); }
 
-    // 失败行
-    if (/\bError\b/.test(line))
+    // 失败行：进入错误状态徽章（需点 OK 手动清除）+ 撤销乐观预测（避免临时错误状态被 ~END 提交）
+    if (/\bError\b/.test(line)) {
       setLastReject(line);
+      setInError(true);
+      setPredicted(null);
+      if (commitTimerRef.current) { clearTimeout(commitTimerRef.current); commitTimerRef.current = null; }
+    }
   };
 
   // Buffered messages flush: many WS frames (esp. during slider drag) collapse
@@ -220,7 +286,38 @@ const App = function(props) {
     }
   };
 
+  // 【第 1 层严格守卫 + 第 2 层乐观切换】
+  // 仅对“固件同步状态机不可能不进入该状态”的命令做乐观预测，避免错误猜测造成“闪绿”。
+  // !START/!HOME/!RESET/!CLOSE/!HD_*/!CALIBRATION 取决于内部条件（atRest/enabled/...），
+  // 交给 STATUS 广播驱动（30ms 内到达）。
+  const transitionOnSend = (cmd, current) => {
+    cmd = (cmd || '').trim();
+    if (!cmd) return null;
+    if (cmd === '!STOP')   return 'estop';                                  // 任何状态都可以急停、同步写状态机
+    if (cmd === '!PAUSE')  return (current === 'estop' || current === 'paused') ? null : 'paused';
+    if (cmd === '!RESUME') return (current === 'estop' || current === 'paused') ? 'working' : null;
+    if (current === 'estop' || current === 'paused') return null;          // halted 守卫
+    if (/^[>@&]/.test(cmd)) return 'working';                              // 队列运动：worker pop 必发 STATUS:Running
+    return null;                                                            // 其余命令不预测，等 STATUS
+  };
+
   const wsSend = (msg) => {
+    // 乐观预测（0 ms 切换徽章）
+    const next = transitionOnSend(msg, predicted || committed);
+    if (next) {
+      setPredicted(next);
+      predictedTsRef.current = Date.now();
+      if (commitTimerRef.current) clearTimeout(commitTimerRef.current);
+      // 超时强制 commit：1500 ms 未收到匹配 STATUS 也提交预测为现实
+      // 用函数式 setState 读当前 predicted，避免闭包捕获旧值（setState 是异步的）
+      commitTimerRef.current = setTimeout(() => {
+        setPredicted(curr => {
+          if (curr) setCommitted(curr);
+          return null;
+        });
+        commitTimerRef.current = null;
+      }, 1500);
+    }
     var s = wsRef.current;
     if (s && s.readyState === 1) s.send(msg + '\n');
     queueMessage({data: msg, uart: false, type: 'sent'});
@@ -350,14 +447,22 @@ const App = function(props) {
     wsSend(cmd + ' ' + tuneNode + ' ' + v);
   };
 
+  // 派生徽章：inError 覆盖一切 → predicted 优先（乐观）→ committed（广播权威）。
+  // 错误状态不走 5s 超时，等用户点 OK 手动清除。
+  const badge = inError ? 'error' : (predicted || committed);
   // 状态门控：ESTOP/PAUSED 下仅允许 STOP/RESUME/查询
-  const isHalted = (robotState === 'estop' || robotState === 'paused');
+  const isHalted = (badge === 'estop' || badge === 'paused');
+  // recentlyDone 仅作为广播丢失时的 fallback（一般不会用到）。
+  let badgeKey = badge;
+  if (badgeKey === 'idle' && recentlyDone) badgeKey = 'done';
   const stateBadge = {
-    normal:  {text: 'NORMAL',  color: '#2ecc71'},
-    estop:   {text: 'E-STOP',  color: '#e74c3c'},
-    paused:  {text: 'PAUSED',  color: '#e67e22'},
-    unknown: {text: '?',       color: '#888'},
-  }[robotState] || {text: '?', color: '#888'};
+    idle:    {text: '待机',  color: '#888'},
+    working: {text: '工作',  color: '#2ecc71'},
+    done:    {text: '完成',  color: '#1abc9c'},
+    estop:   {text: '急停',  color: '#e74c3c'},
+    paused:  {text: '暂停',  color: '#e67e22'},
+    error:   {text: '错误',  color: '#c0392b'},
+  }[badgeKey];
 
   // Auto position polling
   const [autoQuery, setAutoQuery] = useState(false);
@@ -426,9 +531,6 @@ const App = function(props) {
           background:${stateBadge.color}; color:#fff; font-weight:600;">
         ${stateBadge.text}
       </span>
-      ${queueDepth !== null ? html`
-        <span style="font-size:12px; color:#888;">Q:${queueDepth}</span>
-      ` : ''}
       <span class="status-dot" style="color: ${connected ? '#0a0' : '#d00'};">
         \u25cf ${connected ? 'Online' : 'Offline'}
       </span>
@@ -436,7 +538,7 @@ const App = function(props) {
   </div>
 
   ${lastReject ? html`
-    <div onclick=${() => setLastReject('')}
+    <div onclick=${() => { setLastReject(''); setInError(false); }}
          style="position:fixed; inset:0; background:rgba(0,0,0,0.55); z-index:9999;
                 display:flex; align-items:center; justify-content:center;">
       <div onclick=${ev => ev.stopPropagation()}
@@ -450,7 +552,7 @@ const App = function(props) {
           ${lastReject}
         </div>
         <div style="text-align:right;">
-          <button class="btn btn-sm btn-blue" onclick=${() => setLastReject('')}
+          <button class="btn btn-sm btn-blue" onclick=${() => { setLastReject(''); setInError(false); }}
                   style="min-width:5em;">\u786E\u5B9A OK</button>
         </div>
       </div>

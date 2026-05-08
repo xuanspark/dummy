@@ -5,15 +5,15 @@ void TB67H450::InitGpio()
 {
     GPIO_InitTypeDef GPIO_InitStruct = {0};
 
-    /* Signal Ports Clock Enable */
+    /* 信号引脚时钟使能 */
     __HAL_RCC_GPIOA_CLK_ENABLE();
     __HAL_RCC_GPIOB_CLK_ENABLE();
 
-    /*Configure Signal pin Output Level */
+    /* 初始化信号引脚输出电平 */
     HAL_GPIO_WritePin(GPIOA, HW_ELEC_BM_Pin | HW_ELEC_BP_Pin | HW_ELEC_AM_Pin | HW_ELEC_AP_Pin,
                       GPIO_PIN_RESET);
 
-    /*Configure Signal pins : PAPin PAPin PAPin PAPin */
+    /* 配置信号引脚：INA1 / INA2 / INB1 / INB2 (PAx) */
     GPIO_InitStruct.Pin = HW_ELEC_BM_Pin | HW_ELEC_BP_Pin | HW_ELEC_AM_Pin | HW_ELEC_AP_Pin;
     GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
     GPIO_InitStruct.Pull = GPIO_NOPULL;

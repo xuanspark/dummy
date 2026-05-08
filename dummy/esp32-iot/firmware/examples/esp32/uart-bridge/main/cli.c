@@ -1,7 +1,18 @@
+// ============================================================================
+//  cli.c —— 串口控制台命令行实现
+// ----------------------------------------------------------------------------
+//  - 负责处理从串口进入的单字节输入，BS/CR/LF 、行缓冲、命令分发
+//  - 支持 wifi (add/del/list/connect/快捷)、ls/cat/rm、ll、reboot、info 等
+//  - 多 SSID 以 JSON 数组存 WIFI_FILE，最多 WIFI_MAX_APS 个
+//  - 帮助文本中的中文采用 \xE? UTF-8 转义字节，使源文件保持纯 ASCII
+//    以避免某些锁定编诛器编译上的多字节问题。请勿随意增改该部分。
+// ============================================================================
 #include "main.h"
 
-#define WIFI_MAX_APS 5
+#define WIFI_MAX_APS 5  // 同时保存的最多 SSID 数
 
+// wifi_parse：解析 wifi.json，返回读出的 SSID 个数。
+//   - 支持 [{ssid,pass}, ...] 数组格式 与 单个 {ssid,pass} 历史格式
 static int wifi_parse(const char *json, char ss[][33], char pp[][65]) {
   int n = 0;
   if (json == NULL) return 0;
@@ -33,6 +44,7 @@ static int wifi_parse(const char *json, char ss[][33], char pp[][65]) {
   return n;
 }
 
+// wifi_save：将 SSID 数组以 JSON 写回 WIFI_FILE（覆盖式写入）。
 static void wifi_save(char ss[][33], char pp[][65], int n) {
   FILE *fp = fopen(WIFI_FILE, "w");
   if (fp) {
@@ -46,6 +58,7 @@ static void wifi_save(char ss[][33], char pp[][65], int n) {
   }
 }
 
+// cli_wifi_add：添加或更新一个 SSID 凭证。列表满时拒绝。
 static void cli_wifi_add(const char *ssid, const char *pass) {
   char *json = mg_file_read(&mg_fs_posix, WIFI_FILE, NULL);
   char ss[WIFI_MAX_APS][33], pp[WIFI_MAX_APS][65];
@@ -69,6 +82,7 @@ static void cli_wifi_add(const char *ssid, const char *pass) {
   printf("--- WiFi '%s' added (%d/%d)\n", ssid, n + 1, WIFI_MAX_APS);
 }
 
+// cli_wifi_del：按 SSID 删除一条凭证。
 static void cli_wifi_del(const char *ssid) {
   char *json = mg_file_read(&mg_fs_posix, WIFI_FILE, NULL);
   char ss[WIFI_MAX_APS][33], pp[WIFI_MAX_APS][65];
@@ -87,6 +101,7 @@ static void cli_wifi_del(const char *ssid) {
   printf("--- WiFi '%s' deleted\n", ssid);
 }
 
+// cli_wifi_list：列出已保存的 SSID（不包含密码）。
 static void cli_wifi_list(void) {
   char *json = mg_file_read(&mg_fs_posix, WIFI_FILE, NULL);
   char ss[WIFI_MAX_APS][33], pp[WIFI_MAX_APS][65];
@@ -97,6 +112,7 @@ static void cli_wifi_list(void) {
   for (int i = 0; i < n; i++) printf("---   %d. %s\n", i + 1, ss[i]);
 }
 
+// cli_wifi_connect：逐个尝试已保存的 SSID，首个联上后重启以走 app_main 的启动流程。
 static void cli_wifi_connect(void) {
   char *json = mg_file_read(&mg_fs_posix, WIFI_FILE, NULL);
   char ss[WIFI_MAX_APS][33], pp[WIFI_MAX_APS][65];
@@ -153,10 +169,11 @@ static void cli_rm(const char *fname) {
 
 static struct mg_iobuf in;
 
+// cli：处理单个输入字节，收到 \n 后触发命令解析。非阻塞（0/0xFF 直接返回）。
 void cli(uint8_t input_byte) {
   if (input_byte == 0 || input_byte == 0xff) return;
 
-  // Handle backspace (BS=0x08, DEL=0x7F)
+  // 处理退格（BS=0x08, DEL=0x7F）
   if (input_byte == 0x08 || input_byte == 0x7f) {
     if (in.len > 0) {
       in.len--;
@@ -166,7 +183,7 @@ void cli(uint8_t input_byte) {
     return;
   }
 
-  // Echo input: CR/LF as newline, others as-is
+  // 本地回显：CR/LF 统一输出为 \r\n，其余字符原样输出
   if (input_byte == '\r' || input_byte == '\n') {
     printf("\r\n");
   } else {
@@ -174,8 +191,8 @@ void cli(uint8_t input_byte) {
   }
   fflush(stdout);
 
-  if (in.len >= 128) in.len = 0;
-  if (input_byte == '\r') input_byte = '\n';  // treat CR as LF
+  if (in.len >= 128) in.len = 0;                // 超长行丢弃（防缓冲区越界）
+  if (input_byte == '\r') input_byte = '\n';   // 以 \n 作为唯一行结束符
   mg_iobuf_add(&in, in.len, &input_byte, sizeof(input_byte));
 
   if (input_byte == '\n') {
@@ -186,7 +203,7 @@ void cli(uint8_t input_byte) {
     buf0[0] = buf1[0] = buf2[0] = '\0';
     sscanf((char *) in.buf, "%9s %49s %249[^\r\n]", buf0, buf1, buf2);
 
-    // help / ? / empty: show usage without error prefix
+    // help / ? / 空输入：输出帮助文本，不带错误前缀
     if (buf0[0] == '\0' || strcmp(buf0, "help") == 0 ||
         strcmp(buf0, "?") == 0 || strcmp(buf0, "h") == 0) {
       printf("%s Available commands / \xE5\x91\xBD\xE4\xBB\xA4\xE5\x88\x97\xE8\xA1\xA8:\n", arrow);

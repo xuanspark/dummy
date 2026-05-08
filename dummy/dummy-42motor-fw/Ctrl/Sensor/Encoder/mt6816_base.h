@@ -1,3 +1,10 @@
+// ============================================================================
+//  mt6816_base.h —— MT6816 磁编码器抽象基类
+// ----------------------------------------------------------------------------
+//  - 14 bit SPI 磁编码器（一圈 16384 个原始计数）
+//  - 派生 EncoderBase：通过 SPI 读寄存器 → 提取 14 bit 角度 + 校正
+//  - 校正表由 EncoderCalibrator 写入 Flash，供 UpdateAngle 实时查询
+// ============================================================================
 #ifndef CTRL_STEP_FW_MT6816_H
 #define CTRL_STEP_FW_MT6816_H
 
@@ -36,7 +43,7 @@ private:
     uint8_t hCount;
 
 
-    /***** Port Specified Implements *****/
+    /***** 需由平台实现的接口 *****/
     virtual void SpiInit() {};
 
     virtual uint16_t SpiTransmitAndRead16Bits(uint16_t _dataTx) { return 0; };

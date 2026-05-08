@@ -1,5 +1,14 @@
+﻿// ============================================================================
+//  ascii_protocol.cpp —— ref 主控 ASCII 命令协议
+// ----------------------------------------------------------------------------
+//  - 解析 !START / !HOME / !RESET / !CLOSE / !HD_* / !RGB_* 等文本命令
+//  - 按命令类型区分即时命令与异步阻塞命令，保证 STOP/PAUSE 可抢占
+//  - Respond 输出字符串是上位机解析锚点，修改时需保持协议兼容
+// ============================================================================
+
 #include "common_inc.h"
 #include <cstring>
+#include <cmath>
 
 extern DummyRobot dummy;
 extern RGB rgb;
@@ -133,12 +142,12 @@ void OnUsbAsciiCmd(const char* _cmd, size_t _len, StreamSink &_responseChannel)
                 dummy.PostSysCmd(DummyRobot::SYSCMD_RESET, _responseChannel.channelType);
             }
         }
-        // 手爪控制（hand2 / StepHand）—— 失能时拒绝运动命令
+        // 手爪控制（hand2 / StepHand）—— 正式使能/失能统一由 !START / !CLOSE 负责
         else if (MatchExact(_cmd, "!HD_O"))
         {
             if (!dummy.hand2->isEnabled())
             {
-                Respond(_responseChannel, "HD_O Error: hand disabled (use !HD_EN or !START)");
+                Respond(_responseChannel, "HD_O Error: hand disabled (use !START; !HD_EN is test-only)");
             }
             else
             {
@@ -151,7 +160,7 @@ void OnUsbAsciiCmd(const char* _cmd, size_t _len, StreamSink &_responseChannel)
         {
             if (!dummy.hand2->isEnabled())
             {
-                Respond(_responseChannel, "HD_C Error: hand disabled (use !HD_EN or !START)");
+                Respond(_responseChannel, "HD_C Error: hand disabled (use !START; !HD_EN is test-only)");
             }
             else
             {
@@ -209,29 +218,31 @@ void OnUsbAsciiCmd(const char* _cmd, size_t _len, StreamSink &_responseChannel)
         {
             dummy.hand2->SetEnable(true);
             dummy.hand2->UpdateAngle();
-            Respond(_responseChannel, "HD_EN OK enabled=%lu angle=%.2f",
+            Respond(_responseChannel, "HD_EN TEST_ONLY OK enabled=%lu angle=%.2f",
                     (unsigned long)dummy.hand2->isEnabled(), dummy.hand2->angle);
         }
         else if (MatchExact(_cmd, "!HD_DIS"))
         {
             dummy.hand2->SetEnable(false);
             dummy.hand2->UpdateAngle();
-            Respond(_responseChannel, "HD_DIS OK enabled=%lu angle=%.2f",
+            Respond(_responseChannel, "HD_DIS TEST_ONLY OK enabled=%lu angle=%.2f",
                     (unsigned long)dummy.hand2->isEnabled(), dummy.hand2->angle);
         }
         else if (MatchExact(_cmd, "!HD_ZERO"))
         {
             dummy.hand2->HandCalibration();
             dummy.hand2->UpdateAngle();
+            // MIN 永远是 0（闭合零点），MAX 显示为正数（行程绝对值），无视安装方向符号
             Respond(_responseChannel, "HD_ZERO OK MIN:%.2f MAX:%.2f",
-                    dummy.hand2->ClosedAngle, dummy.hand2->OpenedAngle);
+                    dummy.hand2->ClosedAngle,
+                    std::fabs(dummy.hand2->OpenedAngle - dummy.hand2->ClosedAngle));
         }
         else if (MatchExact(_cmd, "!HD_POS"))
         {
             uint32_t pos;
             if (!dummy.hand2->isEnabled())
             {
-                Respond(_responseChannel, "HD_POS Error: hand disabled (use !HD_EN or !START)");
+                Respond(_responseChannel, "HD_POS Error: hand disabled (use !START; !HD_EN is test-only)");
             }
             else if (sscanf(_cmd, "!HD_POS %lu", &pos) == 1)
             {
@@ -286,8 +297,9 @@ void OnUsbAsciiCmd(const char* _cmd, size_t _len, StreamSink &_responseChannel)
             if (dummy.hand2 != nullptr)
             {
                 dummy.hand2->UpdateAngle();
-                float mid = (dummy.hand2->OpenedAngle + dummy.hand2->ClosedAngle) / 2.0f;
-                handState = (dummy.hand2->angle < mid) ? 1 : 0;
+                osDelay(20);    // 等 CAN 0x23 回包更新 isStalled / angle，避免读到陈旧值
+                // H:0=完全闭合 / H:1=完全张开 / H:2=夹住物体（中段堵转）
+                handState = (int) dummy.hand2->GetState();
             }
             Respond(_responseChannel, "GetJPos OK %.2f %.2f %.2f %.2f %.2f %.2f H:%d",
                     dummy.currentJoints.a[0], dummy.currentJoints.a[1],
@@ -301,8 +313,9 @@ void OnUsbAsciiCmd(const char* _cmd, size_t _len, StreamSink &_responseChannel)
             if (dummy.hand2 != nullptr)
             {
                 dummy.hand2->UpdateAngle();
-                float mid = (dummy.hand2->OpenedAngle + dummy.hand2->ClosedAngle) / 2.0f;
-                handState = (dummy.hand2->angle < mid) ? 1 : 0;
+                osDelay(20);    // 等 CAN 0x23 回包更新 isStalled / angle，避免读到陈旧值
+                // H:0=完全闭合 / H:1=完全张开 / H:2=夹住物体（中段堵转）
+                handState = (int) dummy.hand2->GetState();
             }
             Respond(_responseChannel, "GetLPos OK %.2f %.2f %.2f %.2f %.2f %.2f H:%d",
                     dummy.currentPose6D.X, dummy.currentPose6D.Y,
@@ -716,12 +729,12 @@ void OnUart4AsciiCmd(const char* _cmd, size_t _len, StreamSink &_responseChannel
                 dummy.PostSysCmd(DummyRobot::SYSCMD_RESET, _responseChannel.channelType);
             }
         }
-        // 手爪控制（hand2 / StepHand）—— 失能时拒绝运动命令
+        // 手爪控制（hand2 / StepHand）—— 正式使能/失能统一由 !START / !CLOSE 负责
         else if (MatchExact(_cmd, "!HD_O"))
         {
             if (!dummy.hand2->isEnabled())
             {
-                Respond(_responseChannel, "HD_O Error: hand disabled (use !HD_EN or !START)");
+                Respond(_responseChannel, "HD_O Error: hand disabled (use !START; !HD_EN is test-only)");
             }
             else
             {
@@ -734,7 +747,7 @@ void OnUart4AsciiCmd(const char* _cmd, size_t _len, StreamSink &_responseChannel
         {
             if (!dummy.hand2->isEnabled())
             {
-                Respond(_responseChannel, "HD_C Error: hand disabled (use !HD_EN or !START)");
+                Respond(_responseChannel, "HD_C Error: hand disabled (use !START; !HD_EN is test-only)");
             }
             else
             {
@@ -792,29 +805,31 @@ void OnUart4AsciiCmd(const char* _cmd, size_t _len, StreamSink &_responseChannel
         {
             dummy.hand2->SetEnable(true);
             dummy.hand2->UpdateAngle();
-            Respond(_responseChannel, "HD_EN OK enabled=%lu angle=%.2f",
+            Respond(_responseChannel, "HD_EN TEST_ONLY OK enabled=%lu angle=%.2f",
                     (unsigned long)dummy.hand2->isEnabled(), dummy.hand2->angle);
         }
         else if (MatchExact(_cmd, "!HD_DIS"))
         {
             dummy.hand2->SetEnable(false);
             dummy.hand2->UpdateAngle();
-            Respond(_responseChannel, "HD_DIS OK enabled=%lu angle=%.2f",
+            Respond(_responseChannel, "HD_DIS TEST_ONLY OK enabled=%lu angle=%.2f",
                     (unsigned long)dummy.hand2->isEnabled(), dummy.hand2->angle);
         }
         else if (MatchExact(_cmd, "!HD_ZERO"))
         {
             dummy.hand2->HandCalibration();
             dummy.hand2->UpdateAngle();
+            // MIN 永远是 0（闭合零点），MAX 显示为正数（行程绝对值），无视安装方向符号
             Respond(_responseChannel, "HD_ZERO OK MIN:%.2f MAX:%.2f",
-                    dummy.hand2->ClosedAngle, dummy.hand2->OpenedAngle);
+                    dummy.hand2->ClosedAngle,
+                    std::fabs(dummy.hand2->OpenedAngle - dummy.hand2->ClosedAngle));
         }
         else if (MatchExact(_cmd, "!HD_POS"))
         {
             uint32_t pos;
             if (!dummy.hand2->isEnabled())
             {
-                Respond(_responseChannel, "HD_POS Error: hand disabled (use !HD_EN or !START)");
+                Respond(_responseChannel, "HD_POS Error: hand disabled (use !START; !HD_EN is test-only)");
             }
             else if (sscanf(_cmd, "!HD_POS %lu", &pos) == 1)
             {
@@ -867,8 +882,9 @@ void OnUart4AsciiCmd(const char* _cmd, size_t _len, StreamSink &_responseChannel
             if (dummy.hand2 != nullptr)
             {
                 dummy.hand2->UpdateAngle();
-                float mid = (dummy.hand2->OpenedAngle + dummy.hand2->ClosedAngle) / 2.0f;
-                handState = (dummy.hand2->angle < mid) ? 1 : 0;
+                osDelay(20);    // 等 CAN 0x23 回包更新 isStalled / angle，避免读到陈旧值
+                // H:0=完全闭合 / H:1=完全张开 / H:2=夹住物体（中段堵转）
+                handState = (int) dummy.hand2->GetState();
             }
             Respond(_responseChannel, "GetJPos OK %.2f %.2f %.2f %.2f %.2f %.2f H:%d",
                     dummy.currentJoints.a[0], dummy.currentJoints.a[1],
@@ -882,8 +898,9 @@ void OnUart4AsciiCmd(const char* _cmd, size_t _len, StreamSink &_responseChannel
             if (dummy.hand2 != nullptr)
             {
                 dummy.hand2->UpdateAngle();
-                float mid = (dummy.hand2->OpenedAngle + dummy.hand2->ClosedAngle) / 2.0f;
-                handState = (dummy.hand2->angle < mid) ? 1 : 0;
+                osDelay(20);    // 等 CAN 0x23 回包更新 isStalled / angle，避免读到陈旧值
+                // H:0=完全闭合 / H:1=完全张开 / H:2=夹住物体（中段堵转）
+                handState = (int) dummy.hand2->GetState();
             }
             Respond(_responseChannel, "GetLPos OK %.2f %.2f %.2f %.2f %.2f %.2f H:%d",
                     dummy.currentPose6D.X, dummy.currentPose6D.Y,

@@ -1,0 +1,668 @@
+// ============================================================================
+//  motor.cpp —— Motor 顶层对象与 Controller 嵌套类的实现（35 步进版本）
+// ----------------------------------------------------------------------------
+//  - Tick20kHz 是主控制环，由 main.cpp 的 htim4 以 50 µs 节拍调用
+//  - CloseLoopControlTick 在里面按 modeRunning 撑不同环路计算顺序
+//  - DCE/PID 运算与 FOC 打点软调都在 Calc*ToOutput 几个内部函数
+//  - 与 42motor 项目镜像
+// ============================================================================
+#include "configurations.h"
+#include "motor.h"
+
+#include <cmath>
+
+
+// Tick20kHz: 控制环主体，被 htim4 ISR 以 50 µs 节拍调。
+void Motor::Tick20kHz()
+{
+    // 1. 读编码器当前位置
+    encoder->UpdateAngle();
+
+    // 2. 以读到的位置运行闭环控制
+    CloseLoopControlTick();
+}
+
+
+void Motor::AttachEncoder(EncoderBase* _encoder)
+{
+    encoder = _encoder;
+}
+
+
+void Motor::AttachDriver(DriverBase* _driver)
+{
+    driver = _driver;
+}
+
+
+// CloseLoopControlTick: 闭环控制主体。首次调用会对齐零点。
+void Motor::CloseLoopControlTick()
+{
+    /************************************ 首次调用 ************************************/
+    static bool isFirstCalled = true;
+    if (isFirstCalled)
+    {
+        int32_t angle;
+        if (config.motionParams.encoderHomeOffset < MOTOR_ONE_CIRCLE_SUBDIVIDE_STEPS / 2)
+        {
+            angle =
+                encoder->angleData.rectifiedAngle >
+                config.motionParams.encoderHomeOffset + MOTOR_ONE_CIRCLE_SUBDIVIDE_STEPS / 2 ?
+                encoder->angleData.rectifiedAngle - MOTOR_ONE_CIRCLE_SUBDIVIDE_STEPS :
+                encoder->angleData.rectifiedAngle;
+        } else
+        {
+            angle =
+                encoder->angleData.rectifiedAngle <
+                config.motionParams.encoderHomeOffset - MOTOR_ONE_CIRCLE_SUBDIVIDE_STEPS / 2 ?
+                encoder->angleData.rectifiedAngle + MOTOR_ONE_CIRCLE_SUBDIVIDE_STEPS :
+                encoder->angleData.rectifiedAngle;
+        }
+
+        controller->realLapPosition = angle;
+        controller->realLapPositionLast = angle;
+        controller->realPosition = angle;
+        controller->realPositionLast = angle;
+
+        isFirstCalled = false;
+        return;
+    }
+
+    /********************************* 更新数据 *********************************/
+    int32_t deltaLapPosition;
+
+    // 1. 读编码器数据
+    controller->realLapPositionLast = controller->realLapPosition;
+    controller->realLapPosition = encoder->angleData.rectifiedAngle;
+
+    // 2. 计算跨圈位置
+    deltaLapPosition = controller->realLapPosition - controller->realLapPositionLast;
+    if (deltaLapPosition > MOTOR_ONE_CIRCLE_SUBDIVIDE_STEPS >> 1)
+        deltaLapPosition -= MOTOR_ONE_CIRCLE_SUBDIVIDE_STEPS;
+    else if (deltaLapPosition < -MOTOR_ONE_CIRCLE_SUBDIVIDE_STEPS >> 1)
+        deltaLapPosition += MOTOR_ONE_CIRCLE_SUBDIVIDE_STEPS;
+
+    // 3. 计算原始位置
+    controller->realPositionLast = controller->realPosition;
+    controller->realPosition += deltaLapPosition;
+
+    /********************************* 估计数据 *********************************/
+    // 估计速度
+    controller->estVelocityIntegral += (
+        (controller->realPosition - controller->realPositionLast) * motionPlanner.CONTROL_FREQUENCY
+        + ((controller->estVelocity << 5) - controller->estVelocity)
+    );
+    controller->estVelocity = controller->estVelocityIntegral >> 5;
+    controller->estVelocityIntegral -= (controller->estVelocity << 5);
+
+    // 估计位置（超前角补偿后）
+    controller->estLeadPosition = Controller::CompensateAdvancedAngle(controller->estVelocity);
+    controller->estPosition = controller->realPosition + controller->estLeadPosition;
+
+    // 估计误差
+    controller->estError = controller->softPosition - controller->estPosition;
+
+    /************************************ 控制环 ************************************/
+    // 手爪固件关键差异：堆转 **不再** 触发 Sleep。
+    //   - 电流模式：堆转 = 夹住物体，必须保持输出维持夹紧力。
+    //   - 位置模式：到位时 PID 输出会瞬时打到 ratedCurrent，被识别为堆转，
+    //     原 35motor 的逻辑会 Sleep 切断驱动 → 弹簧/齿隙把手爪拉走，看起来"无法保持位置"。
+    //     手爪本来就有 ratedCurrent 硬上限保护电机，无需再用 Sleep 兜底。
+    // 因此堆转只用于 **上报状态**（host 三态判别），不参与 Sleep 判断。
+    if (controller->softDisable || !encoder->IsCalibrated())
+    {
+        controller->ClearIntegral();    // clear integrals
+        controller->focPosition = 0;    // clear outputs
+        controller->focCurrent = 0;
+        driver->Sleep();
+    } else if (controller->softBrake)
+    {
+        controller->ClearIntegral();
+        controller->focPosition = 0;
+        controller->focCurrent = 0;
+        driver->Brake();
+    } else
+    {
+        switch (controller->modeRunning)
+        {
+            case MODE_STEP_DIR:
+                controller->CalcDceToOutput(controller->softPosition, controller->softVelocity);
+                break;
+            case MODE_STOP:
+                driver->Sleep();
+                break;
+            case MODE_COMMAND_Trajectory:
+                controller->CalcDceToOutput(controller->softPosition, controller->softVelocity);
+                break;
+            case MODE_COMMAND_CURRENT:
+                controller->CalcCurrentToOutput(controller->softCurrent);
+                break;
+            case MODE_COMMAND_VELOCITY:
+                controller->CalcPidToOutput(controller->softVelocity);
+                break;
+            case MODE_COMMAND_POSITION:
+                controller->CalcDceToOutput(controller->softPosition, controller->softVelocity);
+                break;
+            case MODE_PWM_CURRENT:
+                controller->CalcCurrentToOutput(controller->softCurrent);
+                break;
+            case MODE_PWM_VELOCITY:
+                controller->CalcPidToOutput(controller->softVelocity);
+                break;
+            case MODE_PWM_POSITION:
+                controller->CalcDceToOutput(controller->softPosition, controller->softVelocity);
+                break;
+            default:
+                break;
+        }
+    }
+
+    /******************************* 模式切换处理 *******************************/
+    if (controller->modeRunning != controller->requestMode)
+    {
+        controller->modeRunning = controller->requestMode;
+        controller->softNewCurve = true;
+    }
+
+    /******************************* 更新硬目标 *******************************/
+    if (controller->goalVelocity > config.motionParams.ratedVelocity)
+        controller->goalVelocity = config.motionParams.ratedVelocity;
+    else if (controller->goalVelocity < -config.motionParams.ratedVelocity)
+        controller->goalVelocity = -config.motionParams.ratedVelocity;
+    if (controller->goalCurrent > config.motionParams.ratedCurrent)
+        controller->goalCurrent = config.motionParams.ratedCurrent;
+    else if (controller->goalCurrent < -config.motionParams.ratedCurrent)
+        controller->goalCurrent = -config.motionParams.ratedCurrent;
+
+    /******************************** 运动规划 *********************************/
+    if ((controller->softDisable && !controller->goalDisable) ||
+        (controller->softBrake && !controller->goalBrake))
+    {
+        controller->softNewCurve = true;
+    }
+
+    if (controller->softNewCurve)
+    {
+        controller->softNewCurve = false;
+        controller->ClearIntegral();
+        controller->ClearStallFlag();
+
+        switch (controller->modeRunning)
+        {
+            case MODE_STOP:
+                break;
+            case MODE_COMMAND_POSITION:
+                motionPlanner.positionTracker.NewTask(controller->estPosition, controller->estVelocity);
+                break;
+            case MODE_COMMAND_VELOCITY:
+                motionPlanner.velocityTracker.NewTask(controller->estVelocity);
+                break;
+            case MODE_COMMAND_CURRENT:
+                motionPlanner.currentTracker.NewTask(controller->focCurrent);
+                break;
+            case MODE_COMMAND_Trajectory:
+                motionPlanner.trajectoryTracker.NewTask(controller->estPosition, controller->estVelocity);
+                break;
+            case MODE_PWM_POSITION:
+                motionPlanner.positionTracker.NewTask(controller->estPosition, controller->estVelocity);
+                break;
+            case MODE_PWM_VELOCITY:
+                motionPlanner.velocityTracker.NewTask(controller->estVelocity);
+                break;
+            case MODE_PWM_CURRENT:
+                motionPlanner.currentTracker.NewTask(controller->focCurrent);
+                break;
+            case MODE_STEP_DIR:
+                motionPlanner.positionInterpolator.NewTask(controller->estPosition, controller->estVelocity);
+                // STEP/DIR 模式使用增量位置
+                controller->goalPosition = controller->estPosition;
+                break;
+            default:
+                break;
+        }
+    }
+
+    /******************************* 更新软目标 *******************************/
+    switch (controller->modeRunning)
+    {
+        case MODE_STOP:
+            break;
+        case MODE_COMMAND_POSITION:
+            motionPlanner.positionTracker.CalcSoftGoal(controller->goalPosition);
+            controller->softPosition = motionPlanner.positionTracker.go_location;
+            controller->softVelocity = motionPlanner.positionTracker.go_velocity;
+            break;
+        case MODE_COMMAND_VELOCITY:
+            motionPlanner.velocityTracker.CalcSoftGoal(controller->goalVelocity);
+            controller->softVelocity = motionPlanner.velocityTracker.goVelocity;
+            break;
+        case MODE_COMMAND_CURRENT:
+            motionPlanner.currentTracker.CalcSoftGoal(controller->goalCurrent);
+            controller->softCurrent = motionPlanner.currentTracker.goCurrent;
+            break;
+        case MODE_COMMAND_Trajectory:
+            motionPlanner.trajectoryTracker.CalcSoftGoal(controller->goalPosition, controller->goalVelocity);
+            controller->softPosition = motionPlanner.trajectoryTracker.goPosition;
+            controller->softVelocity = motionPlanner.trajectoryTracker.goVelocity;
+            break;
+        case MODE_PWM_POSITION:
+            motionPlanner.positionTracker.CalcSoftGoal(controller->goalPosition);
+            controller->softPosition = motionPlanner.positionTracker.go_location;
+            controller->softVelocity = motionPlanner.positionTracker.go_velocity;
+            break;
+        case MODE_PWM_VELOCITY:
+            motionPlanner.velocityTracker.CalcSoftGoal(controller->goalVelocity);
+            controller->softVelocity = motionPlanner.velocityTracker.goVelocity;
+            break;
+        case MODE_PWM_CURRENT:
+            motionPlanner.currentTracker.CalcSoftGoal(controller->goalCurrent);
+            controller->softCurrent = motionPlanner.currentTracker.goCurrent;
+            break;
+        case MODE_STEP_DIR:
+            motionPlanner.positionInterpolator.CalcSoftGoal(controller->goalPosition);
+            controller->softPosition = motionPlanner.positionInterpolator.goPosition;
+            controller->softVelocity = motionPlanner.positionInterpolator.goVelocity;
+            break;
+        default:
+            break;
+    }
+
+    controller->softDisable = controller->goalDisable;
+    controller->softBrake = controller->goalBrake;
+
+    /******************************** 状态检查 ********************************/
+    int32_t current = abs(controller->focCurrent);
+
+    // 堆转检测
+    if (controller->config->stallProtectSwitch)
+    {
+        if (// Current Mode
+            ((controller->modeRunning == MODE_COMMAND_CURRENT ||
+              controller->modeRunning == MODE_PWM_CURRENT) &&
+             (current != 0))
+            || // Other Mode
+            current == config.motionParams.ratedCurrent)
+        {
+            if (abs(controller->estVelocity) < MOTOR_ONE_CIRCLE_SUBDIVIDE_STEPS / 5)
+            {
+                // 手爪固件：堆转触发阈值从 1 s 缩短到 300 ms，夹住物体后能快速上报
+                if (controller->stalledTime >= 300 * 1000)
+                    controller->isStalled = true;
+                else
+                    controller->stalledTime += motionPlanner.CONTROL_PERIOD;
+            }
+        } else // motor 不在堆转条件下
+        {
+            controller->stalledTime = 0;
+            // 手爪固件：所有模式都自动清 isStalled。
+            //   - 位置模式不再 Sleep（见控制环注释），保护已由 ratedCurrent 兜底；
+            //     若不自动清，到位时偶发的瞬时电流尖峰会让 isStalled 永久置位，
+            //     host 侧 GetState() 在 lastCloseRequested=true 时误报 GRIPPED。
+            //   - 电流模式同样需要自动清，避免 !HD_O 释放后 sticky 残留。
+            controller->isStalled = false;
+        }
+    }
+
+    // 过载检测
+    if ((controller->modeRunning != MODE_COMMAND_CURRENT) &&
+        (controller->modeRunning != MODE_PWM_CURRENT) &&
+        (current == config.motionParams.ratedCurrent))
+    {
+        if (controller->overloadTime >= 1000 * 1000)
+            controller->overloadFlag = true;
+        else
+            controller->overloadTime += motionPlanner.CONTROL_PERIOD;
+    } else // auto clear overload flag when released
+    {
+        controller->overloadTime = 0;
+        controller->overloadFlag = false;
+    }
+
+    /******************************** 更新状态 ********************************/
+    if (!encoder->IsCalibrated())
+        controller->state = STATE_NO_CALIB;
+    else if (controller->modeRunning == MODE_STOP)
+        controller->state = STATE_STOP;
+    // 手爪固件：电流/PWM 模式下的"夹紧堆转"是正常工作状态（夹住物体或顶到限位），
+    // 不应该被上报为 STATE_STALL（否则 LED1 会按 STALL 模式闪烁两下，看起来像故障）。
+    // 真正异常的堆转才走 STATE_STALL（位置/速度模式下），与原 35motor 行为一致。
+    else if (controller->isStalled &&
+             controller->modeRunning != MODE_COMMAND_CURRENT &&
+             controller->modeRunning != MODE_PWM_CURRENT)
+        controller->state = STATE_STALL;
+    else if (controller->overloadFlag)
+        controller->state = STATE_OVERLOAD;
+    else
+    {
+        if (controller->modeRunning == MODE_COMMAND_POSITION)
+        {
+            if ((controller->softPosition == controller->goalPosition)
+                && (controller->softVelocity == 0))
+                controller->state = STATE_FINISH;
+            else
+                controller->state = STATE_RUNNING;
+        } else if (controller->modeRunning == MODE_COMMAND_VELOCITY)
+        {
+            if (controller->softVelocity == controller->goalVelocity)
+                controller->state = STATE_FINISH;
+            else
+                controller->state = STATE_RUNNING;
+        } else if (controller->modeRunning == MODE_COMMAND_CURRENT)
+        {
+            if (controller->softCurrent == controller->goalCurrent)
+                controller->state = STATE_FINISH;
+            else
+                controller->state = STATE_RUNNING;
+        } else
+        {
+            controller->state = STATE_FINISH;
+        }
+    }
+}
+
+
+void Motor::Controller::CalcCurrentToOutput(int32_t current)
+{
+    focCurrent = current;
+
+    if (focCurrent > 0)
+        focPosition = estPosition + context->SOFT_DIVIDE_NUM; // ahead phase of 90°
+    else if (focCurrent < 0)
+        focPosition = estPosition - context->SOFT_DIVIDE_NUM; // behind phase of 90°
+    else focPosition = estPosition;
+
+    context->driver->SetFocCurrentVector(focPosition, focCurrent);
+}
+
+
+void Motor::Controller::CalcPidToOutput(int32_t _speed)
+{
+    config->pid.vErrorLast = config->pid.vError;
+    config->pid.vError = _speed - estVelocity;
+    if (config->pid.vError > (1024 * 1024)) config->pid.vError = (1024 * 1024);
+    if (config->pid.vError < (-1024 * 1024)) config->pid.vError = (-1024 * 1024);
+    config->pid.outputKp = ((config->pid.kp) * (config->pid.vError));
+
+    config->pid.integralRound += (config->pid.ki * config->pid.vError);
+    config->pid.integralRemainder = config->pid.integralRound >> 10;
+    config->pid.integralRound -= (config->pid.integralRemainder << 10);
+    config->pid.outputKi += config->pid.integralRemainder;
+    // integralRound 上限 = ratedCurrent * 1024（防积分饱和）
+    if (config->pid.outputKi > context->config.motionParams.ratedCurrent << 10)
+        config->pid.outputKi = context->config.motionParams.ratedCurrent << 10;
+    else if (config->pid.outputKi < -(context->config.motionParams.ratedCurrent << 10))
+        config->pid.outputKi = -(context->config.motionParams.ratedCurrent << 10);
+
+    config->pid.outputKd = config->pid.kd * (config->pid.vError - config->pid.vErrorLast);
+
+    config->pid.output = (config->pid.outputKp + config->pid.outputKi + config->pid.outputKd) >> 10;
+    if (config->pid.output > context->config.motionParams.ratedCurrent)
+        config->pid.output = context->config.motionParams.ratedCurrent;
+    else if (config->pid.output < -context->config.motionParams.ratedCurrent)
+        config->pid.output = -context->config.motionParams.ratedCurrent;
+
+    CalcCurrentToOutput(config->pid.output);
+}
+
+
+void Motor::Controller::CalcDceToOutput(int32_t _location, int32_t _speed)
+{
+    config->dce.pError = _location - estPosition;
+    if (config->dce.pError > (3200)) config->dce.pError = (3200);   // limited pError to 1/16r (51200/16)
+    if (config->dce.pError < (-3200)) config->dce.pError = (-3200);
+    config->dce.vError = (_speed - estVelocity) >> 7;
+    if (config->dce.vError > (4000)) config->dce.vError = (4000);   // limited vError
+    if (config->dce.vError < (-4000)) config->dce.vError = (-4000);
+
+    config->dce.outputKp = config->dce.kp * config->dce.pError;
+
+    config->dce.integralRound += (config->dce.ki * config->dce.pError + config->dce.kv * config->dce.vError);
+    config->dce.integralRemainder = config->dce.integralRound >> 7;
+    config->dce.integralRound -= (config->dce.integralRemainder << 7);
+    config->dce.outputKi += config->dce.integralRemainder;
+    // 限制为 ratedCurrent * 1024，在不同场景下应重新调优
+    if (config->dce.outputKi > context->config.motionParams.ratedCurrent << 10)
+        config->dce.outputKi = context->config.motionParams.ratedCurrent << 10;
+    else if (config->dce.outputKi < -(context->config.motionParams.ratedCurrent << 10))
+        config->dce.outputKi = -(context->config.motionParams.ratedCurrent << 10);
+
+    config->dce.outputKd = ((config->dce.kd) * (config->dce.vError));
+
+    config->dce.output = (config->dce.outputKp + config->dce.outputKi + config->dce.outputKd) >> 10;
+    if (config->dce.output > context->config.motionParams.ratedCurrent)
+        config->dce.output = context->config.motionParams.ratedCurrent;
+    else if (config->dce.output < -context->config.motionParams.ratedCurrent)
+        config->dce.output = -context->config.motionParams.ratedCurrent;
+
+    CalcCurrentToOutput(config->dce.output);
+}
+
+
+void Motor::Controller::SetCtrlMode(Motor::Mode_t _mode)
+{
+    requestMode = _mode;
+}
+
+
+void Motor::Controller::AddTrajectorySetPoint(int32_t _pos, int32_t _vel)
+{
+    SetPositionSetPoint(_pos);
+    SetVelocitySetPoint(_vel);
+}
+
+
+void Motor::Controller::SetPositionSetPoint(int32_t _pos)
+{
+    goalPosition = _pos + context->config.motionParams.encoderHomeOffset;
+}
+
+
+bool Motor::Controller::SetPositionSetPointWithTime(int32_t _pos, float _time)
+{
+    int32_t deltaPos = abs(_pos - realPosition + context->config.motionParams.encoderHomeOffset);
+
+    float pMax = (float) context->config.motionParams.ratedVelocityAcc * _time * _time / 4;
+    if ((float) deltaPos > pMax)
+    {
+        context->config.motionParams.ratedVelocity = boardConfig.velocityLimit;
+        SetPositionSetPoint(_pos);
+
+        return false;
+    } else
+    {
+        float vMax = _time * (float) context->config.motionParams.ratedVelocityAcc;
+        vMax -= (float) context->config.motionParams.ratedVelocityAcc *
+                (sqrtf(_time * _time - 4 * (float) deltaPos /
+                                       (float) context->config.motionParams.ratedVelocityAcc));
+        vMax /= 2;
+
+        context->config.motionParams.ratedVelocity = (int32_t) vMax;
+        SetPositionSetPoint(_pos);
+
+        return true;
+    }
+}
+
+
+void Motor::Controller::SetVelocitySetPoint(int32_t _vel)
+{
+    if ((_vel >= -context->config.motionParams.ratedVelocity) &&
+        (_vel <= context->config.motionParams.ratedVelocity))
+    {
+        goalVelocity = _vel;
+    }
+}
+
+
+float Motor::Controller::GetPosition(bool _isLap)
+{
+    return _isLap ?
+           (float) (realLapPosition - context->config.motionParams.encoderHomeOffset) /
+           (float) (context->MOTOR_ONE_CIRCLE_SUBDIVIDE_STEPS)
+                  :
+           (float) (realPosition - context->config.motionParams.encoderHomeOffset) /
+           (float) (context->MOTOR_ONE_CIRCLE_SUBDIVIDE_STEPS);
+}
+
+
+float Motor::Controller::GetVelocity()
+{
+    return (float) estVelocity / (float) context->MOTOR_ONE_CIRCLE_SUBDIVIDE_STEPS;
+}
+
+
+float Motor::Controller::GetFocCurrent()
+{
+    return (float) focCurrent / 1000.f;
+}
+
+
+void Motor::Controller::SetCurrentSetPoint(int32_t _cur)
+{
+    if (_cur > context->config.motionParams.ratedCurrent)
+        goalCurrent = context->config.motionParams.ratedCurrent;
+    else if (_cur < -context->config.motionParams.ratedCurrent)
+        goalCurrent = -context->config.motionParams.ratedCurrent;
+    else
+        goalCurrent = _cur;
+}
+
+
+void Motor::Controller::SetDisable(bool _disable)
+{
+    goalDisable = _disable;
+}
+
+
+void Motor::Controller::SetBrake(bool _brake)
+{
+    goalBrake = _brake;
+
+}
+
+
+void Motor::Controller::ClearStallFlag()
+{
+    stalledTime = 0;
+    isStalled = false;
+}
+
+
+int32_t Motor::Controller::CompensateAdvancedAngle(int32_t _vel)
+{
+    /*
+     * 代码为 DPS 系列传感器调试而设，TLE5012 / MT6816 需重新测量并更新参数。
+     */
+
+    int32_t compensate;
+
+    if (_vel < 0)
+    {
+        if (_vel > -100000) compensate = 0;
+        else if (_vel > -1300000) compensate = (((_vel + 100000) * 262) >> 20) - 0;
+        else if (_vel > -2200000) compensate = (((_vel + 1300000) * 105) >> 20) - 300;
+        else compensate = (((_vel + 2200000) * 52) >> 20) - 390;
+
+        if (compensate < -430) compensate = -430;
+    } else
+    {
+        if (_vel < 100000) compensate = 0;
+        else if (_vel < 1300000) compensate = (((_vel - 100000) * 262) >> 20) + 0;
+        else if (_vel < 2200000) compensate = (((_vel - 1300000) * 105) >> 20) + 300;
+        else compensate = (((_vel - 2200000) * 52) >> 20) + 390;
+
+        if (compensate > 430) compensate = 430;
+    }
+
+    return compensate;
+}
+
+
+void Motor::Controller::Init()
+{
+    requestMode = boardConfig.enableMotorOnBoot ? static_cast<Mode_t>(boardConfig.defaultMode) : MODE_STOP;
+
+    modeRunning = MODE_STOP;
+    state = STATE_STOP;
+
+    realLapPosition = 0;
+    realLapPositionLast = 0;
+    realPosition = 0;
+    realPositionLast = 0;
+
+    estVelocityIntegral = 0;
+    estVelocity = 0;
+    estLeadPosition = 0;
+    estPosition = 0;
+    estError = 0;
+
+    goalPosition = context->config.motionParams.encoderHomeOffset;
+    goalVelocity = 0;
+    goalCurrent = 0;
+    goalDisable = false;
+    goalBrake = false;
+
+    softPosition = 0;
+    softVelocity = 0;
+    softCurrent = 0;
+    softDisable = false;
+    softBrake = false;
+    softNewCurve = false;
+
+    focPosition = 0;
+    focCurrent = 0;
+
+    stalledTime = 0;
+    isStalled = false;
+
+    overloadTime = 0;
+    overloadFlag = false;
+
+    config->pid.vError = 0;
+    config->pid.vErrorLast = 0;
+    config->pid.outputKp = 0;
+    config->pid.outputKi = 0;
+    config->pid.outputKd = 0;
+    config->pid.integralRound = 0;
+    config->pid.integralRemainder = 0;
+    config->pid.output = 0;
+
+    config->dce.pError = 0;
+    config->dce.vError = 0;
+    config->dce.outputKp = 0;
+    config->dce.outputKi = 0;
+    config->dce.outputKd = 0;
+    config->dce.integralRound = 0;
+    config->dce.integralRemainder = 0;
+    config->dce.output = 0;
+}
+
+
+void Motor::Controller::ApplyPosAsHomeOffset()
+{
+    // 手爪固件：行程跨多圈电机（reduction=8，行程 ~5 圈），不能再像关节那样按单圈取模，
+    // 否则 homeOffset 会丢掉多圈分量，GetPosition() 永远偏移整数圈，
+    // 表现：!HD_ZERO 后 OpenedAngle 远离 0、!HD_POS 几乎不动。
+    // 直接保存完整 realPosition 即可（手爪每次开机都重新 !HD_ZERO，不依赖跨次开机的绝对零点）。
+    context->config.motionParams.encoderHomeOffset = realPosition;
+}
+
+
+void Motor::Controller::AttachConfig(Motor::Controller::Config_t* _config)
+{
+    config = _config;
+}
+
+
+void Motor::Controller::ClearIntegral() const
+{
+    config->pid.integralRound = 0;
+    config->pid.integralRemainder = 0;
+    config->pid.outputKi = 0;
+
+    config->dce.integralRound = 0;
+    config->dce.integralRemainder = 0;
+    config->dce.outputKi = 0;
+}
+
+

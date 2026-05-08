@@ -1,3 +1,11 @@
+// ============================================================================
+//  ctrl_step.cpp —— CAN 步进电机节点封装实现
+// ----------------------------------------------------------------------------
+//  - 将关节角度、速度、电流、DCE 参数等高级操作编码为 CAN 命令
+//  - 维护节点在线状态、实时反馈角度和运动完成标志
+//  - 作为 ref 主控与 35/42 电机子板之间的唯一执行器抽象
+// ============================================================================
+
 #include "ctrl_step.hpp"
 #include "communication.hpp"
 
@@ -269,13 +277,19 @@ void CtrlStepMotor::UpdateAngle()
     uint8_t mode = 0x23;
     txHeader.StdId = nodeID << 7 | mode;
 
+    // 清空 canBuf，避免前序命令（如 SetPositionWithVelocityLimit）写入的字节
+    // 透传到子板。35hand 固件用 _data[5]/[6] 携带 isStalled/state，必须保证查询帧
+    // 这些位置发出时为 0。
+    for (int i = 0; i < 8; i++) canBuf[i] = 0;
+
     CanSendMessage(get_can_ctx(hcan), canBuf, &txHeader);
 }
 
 
-void CtrlStepMotor::UpdateAngleCallback(float _pos, bool _isFinished)
+void CtrlStepMotor::UpdateAngleCallback(float _pos, bool _isFinished, bool _isStalled)
 {
     state = _isFinished ? FINISH : RUNNING;
+    isStalled = _isStalled;
 
     float tmp = _pos / (float) reduction * 360;
     angle = inverseDirection ? -tmp : tmp;

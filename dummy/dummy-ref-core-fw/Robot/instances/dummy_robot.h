@@ -1,3 +1,11 @@
+// ============================================================================
+//  dummy_robot.h —— Dummy 六轴机器人对象定义
+// ----------------------------------------------------------------------------
+//  - 汇总关节电机、手爪、运动学、命令队列、RGB 自动模式等核心状态
+//  - 定义 NORMAL / EMERGENCY_STOP / PAUSED 三态运行状态机
+//  - 对外提供 MoveJ、MoveL、Homing、Resting 以及系统命令入口
+// ============================================================================
+
 #ifndef REF_STM32F4_FW_DUMMY_ROBOT_H
 #define REF_STM32F4_FW_DUMMY_ROBOT_H
 
@@ -53,44 +61,71 @@ public:
 
     void SetPercentToAngle (float _percent)
     {
-        float angle_=OpenedAngle+(_percent/100.0f)*230;
-
-
-        SetAngleWithVelocityLimit(angle_,65);
+        // 约定：_percent = 0 → 完全关闭，_percent = 100 → 完全张开
+        // 公式自适应任意符号的 OpenedAngle / ClosedAngle（不依赖固定 230° 行程）
+        float angle_ = ClosedAngle + (_percent / 100.0f) * (OpenedAngle - ClosedAngle);
+        // 中点以下视为偏向闭合（用于 GetState 三态判别）
+        lastCloseRequested = (_percent < 50.0f);
+        // 速度限制 10 r/s：手爪 dce_kp=195 偏低、负载较大，过快会让位置环跟不上软轨迹
+        // 触发 300 ms 估计速度阈值堵转保护，电机被 driver->Sleep() 切断，看起来"几乎不动 + LED 闪烁"。
+        SetAngleWithVelocityLimit(angle_, 10);
     }
-    //电流控制位置
+    //电流控制位置：inverse > 0 = 闭合（+电流），inverse < 0 = 张开（-电流）
     void SetAngleWithCurrentLimit(float inverse)
     {
+        lastCloseRequested = (inverse > 0);
         SetCurrentSetPoint(inverse*current);
     }
 
     //
-    //校准位置模式
+    // 校准：用电流模式顶到机械限位，再读编码器 → 不依赖任何旧的 OpenedAngle/ClosedAngle 值，
+    // 即使 EEPROM 零点和主控 OpenedAngle/ClosedAngle 都被污染过也能恢复。
+    //
+    // 流程：先开 → 再合（合处归零，ClosedAngle = 0）→ 再开（读 OpenedAngle 数值）
+    // 这样输出 ClosedAngle = 0、OpenedAngle = 行程数值，视觉上"先开再合"（第三步只是量值）。
     void HandCalibration()
     {
-
-        if (is_cali==1)
+        if (is_cali == 1)
             return;
-        is_cali=1;
-        SetAngleWithVelocityLimit(OpenedAngle, 7.0f); //
-        HAL_Delay(900);
+        is_cali = 1;
 
+        // ---- Step 1: 张开到限位（不归零，仅为视觉上的"先开"）----
+        SetAngleWithCurrentLimit(-1);   // -1 = 张开（与 !HD_O 一致）
+        HAL_Delay(1500);
+
+        // ---- Step 2: 闭合到限位 ----
+        SetAngleWithCurrentLimit(+1);   // +1 = 闭合（与 !HD_C 一致）
+        HAL_Delay(1500);
+
+        // ---- Step 3: 在闭合限位处归零 → 闭合位置就是 0 ----
         ApplyPositionAsHome();
+        HAL_Delay(150);                 // 等 EEPROM commit + slave 主循环刷新
 
         UpdateAngle();
         HAL_Delay(100);
-        OpenedAngle= angle;
+        ClosedAngle = angle;            // 闭合 ≈ 0（刚归零）
 
-        SetAngleWithVelocityLimit(ClosedAngle, 7.0f); //
-        HAL_Delay(900);
+        // ---- Step 4: 再次张开到限位，读取相对零点的数值 ----
+        SetAngleWithCurrentLimit(-1);
+        HAL_Delay(1500);
 
         UpdateAngle();
         HAL_Delay(100);
-        ClosedAngle = angle;
+        OpenedAngle = angle;            // 张开位置（相对闭合零点，可能为负，看安装方向）
 
+        // ---- Step 5: 末尾合一下，让手爪停在闭合位置（用户期望的静止状态）----
+        SetAngleWithCurrentLimit(+1);
+        HAL_Delay(1500);
+
+        // ---- Step 6: 释放电流，避免持续夹紧产热 ----
+        SetCurrentSetPoint(0);
+        HAL_Delay(50);
         SetEnable(false);
 
-        is_cali=0;
+        // 校准结束时手爪物理位于闭合位置，标志同步以避免下次 #GETJPOS 误报为张开
+        lastCloseRequested = true;
+
+        is_cali = 0;
     }
 
     // 状态查询：使用独立标志，避免被 UpdateAngleCallback 改写的 state 字段干扰
@@ -98,8 +133,36 @@ public:
         return enabledFlag;
     }
 
+    // 三态手爪状态（与 ASCII 协议 H 字段一致）
+    enum HandState { HS_CLOSED = 0, HS_OPEN = 1, HS_GRIPPED = 2 };
+
+    // 综合判别手爪当前状态。决策树（按优先级从高到低）：
+    //   1. 失能：相信最后一次命令的方向语义（电机不作用力，isStalled 可能是 sticky 残留）
+    //   2. 堵转 + 关爪命令：偏离闭合零点 epsilon 以上 → 中段堵转 = 夹住物体 (HS_GRIPPED)
+    //                       否则 → 已撞合拢端机械限位 (HS_CLOSED)
+    //   3. 堵转 + 张爪命令：撞张开端 (HS_OPEN)
+    //   4. 未堵转：以最后一次命令的方向语义为准
+    HandState GetState(float epsilon = 5.0f) const {
+        if (!enabledFlag)
+            return lastCloseRequested ? HS_CLOSED : HS_OPEN;
+
+        if (isStalled && lastCloseRequested) {
+            // 堵转点距离闭合零点的距离（与符号无关，适配任意安装方向）
+            float dist = angle - ClosedAngle;
+            if (dist < 0) dist = -dist;
+            return (dist > epsilon) ? HS_GRIPPED : HS_CLOSED;
+        }
+        if (isStalled && !lastCloseRequested)
+            return HS_OPEN;
+
+        return lastCloseRequested ? HS_CLOSED : HS_OPEN;
+    }
+
 private:
-    bool is_cali=0;
+    bool is_cali = 0;
+    // 最后一次发出的方向语义：true = 关爪意图（!HD_C / SetPercentToAngle<50），false = 张爪意图。
+    // 默认 true：上电后未发命令时若被外力推开，#GETJPOS 报 H:0（比报 H:1 更安全）。
+    bool lastCloseRequested = true;
 };
 
 

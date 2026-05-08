@@ -1,37 +1,50 @@
+// ============================================================================
+//  main.cpp —— 35 步进子板主入口
+// ----------------------------------------------------------------------------
+//  - 主控：STM32F103CB @ 72 MHz，与 REF 主控以 CAN 总线联动
+//  - 驱动：TB67H450 双 H 桥 + MT6816 磁编码器，闭环 DCE 控制
+//  - 与 42motor 项目完全镜像，仅默认 dce_kp = 195（小型 35 mm 步进需更低增益）
+//  - 节点 ID 由 PA8/9/10 三位拨码开关读出
+//  - 100 Hz 定时器：按键扫描 + LED 状态 + 可选温度采样
+//  - 20 kHz 定时器：控制环 / 编码器校准 (Tick20kHz)
+//  - EEPROM 优先则：EEPROM > Motor.h 默认值
+// ============================================================================
 #include "common_inc.h"
 #include "configurations.h"
 #include "Platform/Utils/st_hardware.h"
 #include <tim.h>
 
 
-/* Component Definitions -----------------------------------------------------*/
-BoardConfig_t boardConfig;
-Motor motor;
-TB67H450 tb67H450;
-MT6816 mt6816;
-EncoderCalibrator encoderCalibrator(&motor);
-Button button1(1, 1000), button2(2, 3000);
+/* 组件全局定义 ----------------------------------------------------- */
+BoardConfig_t boardConfig;                      // EEPROM 中的本板配置快照
+Motor motor;                                    // 顶层电机对象（驱动 + 编码器 + 运动规划 + 控制器）
+TB67H450 tb67H450;                              // 双 H 桥驱动芯片
+MT6816 mt6816;                                  // 磁编码器
+EncoderCalibrator encoderCalibrator(&motor);    // 编码器校准器（出厂 / 长按按键触发）
+Button button1(1, 1000), button2(2, 3000);      // 两个按键（1 秒 / 3 秒 长按阈值）
 void OnButton1Event(Button::Event _event);
 void OnButton2Event(Button::Event _event);
-Led statusLed;
-/* Main Entry ----------------------------------------------------------------*/
+Led statusLed;                                  // 状态指示 LED
+
+/* 主入口 -------------------------------------------------------------- */
 void Main()
 {
     uint64_t serialNum = GetSerialNumber();
     uint16_t defaultNodeID = 0;
-    //ID0 is PA8 -->  Switch 4
-    //ID1 is PA9 -->  Switch 3
-    //ID2 is PA10 --> Switch 2
+    // ID 拨码开关（3 位二进制 = 0~7 节点号）：
+    //   ID0 = PA8  --> 拨码 4
+    //   ID1 = PA9  --> 拨码 3
+    //   ID2 = PA10 --> 拨码 2
     uint16_t nodeID = !HAL_GPIO_ReadPin(GPIOA, ID0_Pin);
     nodeID |= !HAL_GPIO_ReadPin(GPIOA, ID1_Pin) << 1;
     nodeID |= !HAL_GPIO_ReadPin(GPIOA, ID2_Pin) << 2;
     defaultNodeID = nodeID;
 
-    /*---------- Apply EEPROM Settings ----------*/
-    // Setting priority is EEPROM > Motor.h
+    /*---------- 从 EEPROM 读取配置 ----------*/
+    // 优先顺序：EEPROM 内容 > Motor.h 默认值
     EEPROM eeprom;
     eeprom.get(0, boardConfig);
-    if (boardConfig.configStatus != CONFIG_OK) // use default settings
+    if (boardConfig.configStatus != CONFIG_OK) // EEPROM 为空或损坏，写入默认配置
     {
         boardConfig = BoardConfig_t{
             .configStatus = CONFIG_OK,
@@ -54,7 +67,7 @@ void Main()
         eeprom.put(0, boardConfig);
     }
     boardConfig.enableTempWatch=false;
-    //depends on 3 bits switch now
+    // 节点 ID 不从 EEPROM 读，始终以 3 位拨码开关为准
     boardConfig.canNodeId = defaultNodeID;
     motor.config.motionParams.encoderHomeOffset = boardConfig.encoderHomeOffset;
     motor.config.motionParams.ratedCurrent = boardConfig.currentLimit;
@@ -75,39 +88,43 @@ void Main()
 //    printf("kp[%d] kv[%d] ki[%d] kd[%d]\r\n" , boardConfig.dce_kp, boardConfig.dce_kv, boardConfig.dce_ki, boardConfig.dce_kd);
 
 
-    /*---------------- Init Motor ----------------*/
-    motor.AttachDriver(&tb67H450);
-    motor.AttachEncoder(&mt6816);
+    /*---------------- 初始化电机三套件 ----------------*/
+    motor.AttachDriver(&tb67H450);    // 绑定驱动芯片
+    motor.AttachEncoder(&mt6816);     // 绑定编码器
     motor.controller->Init();
     motor.driver->Init();
     motor.encoder->Init();
 
 
-    /*------------- Init peripherals -------------*/
+    /*------------- 初始化外设 -------------*/
     button1.SetOnEventListener(OnButton1Event);
     button2.SetOnEventListener(OnButton2Event);
 
 
-    /*------- Start Close-Loop Control Tick ------*/
+    /*------- 启动闭环控制定时器 ------*/
     HAL_Delay(100);
-    HAL_TIM_Base_Start_IT(&htim1);  // 100Hz
-    HAL_TIM_Base_Start_IT(&htim4);  // 20kHz
+    HAL_TIM_Base_Start_IT(&htim1);  // 100 Hz周期，处理按键 / LED / 温度采样
+    HAL_TIM_Base_Start_IT(&htim4);  // 20 kHz周期，处理控制环 / 校准
 
+    // 同时按住两键开机 → 进入编码器校准流程
     if (button1.IsPressed() && button2.IsPressed())
         encoderCalibrator.isTriggered = true;
 //    printf("start motor %d\r\n", defaultNodeID);
 
     for (;;)
     {
+        // 主循环：编码器校准轮询 + EEPROM 提交 / 恢复检查
 //        if ( encoderCalibrator.FlashRun() == 0)
             encoderCalibrator.TickMainLoop();
 
         if (boardConfig.configStatus == CONFIG_COMMIT)
         {
+            // 提交：将编辑后的配置制入 EEPROM
             boardConfig.configStatus = CONFIG_OK;
             eeprom.put(0, boardConfig);
         } else if (boardConfig.configStatus == CONFIG_RESTORE)
         {
+            // 恢复：写回 EEPROM 后立即重启令配置生效
             eeprom.put(0, boardConfig);
             HAL_NVIC_SystemReset();
         }
@@ -115,9 +132,10 @@ void Main()
 }
 
 
-/* Event Callbacks -----------------------------------------------------------*/
-//let's add a global count in here for quick test
+/* 事件回调 ----------------------------------------------------------- */
+// 全局计数供温度采样使用（1 s = 100 个 100 Hz tick）
 uint32_t count;
+// 100 Hz 定时器回调。处理按键 + LED + 可选温度采样。
 extern "C" void Tim1Callback100Hz()
 {
     __HAL_TIM_CLEAR_IT(&htim1, TIM_IT_UPDATE);
@@ -125,7 +143,7 @@ extern "C" void Tim1Callback100Hz()
     button1.Tick(10);
     button2.Tick(10);
     statusLed.Tick(10, motor.controller->state);
-    //1s period to collect a temperature data
+    // 每 1 秒（100 个 tick）采样一次温度，中间点 LED 闪以示警
     if (boardConfig.enableTempWatch)
     {
         count ++;
@@ -146,6 +164,7 @@ extern "C" void Tim1Callback100Hz()
 }
 
 
+// 20 kHz 定时器回调。控制环主体：正常跑 motor.Tick20kHz，校准期间跑校准逻辑。
 extern "C" void Tim4Callback20kHz()
 {
     __HAL_TIM_CLEAR_IT(&htim4, TIM_IT_UPDATE);
@@ -157,6 +176,7 @@ extern "C" void Tim4Callback20kHz()
 }
 
 
+// 按键 1：长按进入编码器校准；短按在 STOP 与上一位运行模式之间切换
 void OnButton1Event(Button::Event _event)
 {
     switch (_event)
@@ -166,6 +186,7 @@ void OnButton1Event(Button::Event _event)
         case ButtonBase::DOWN:
             break;
         case ButtonBase::LONG_PRESS:
+            // 长按：进入编码器校准路径（Tick20kHz 会被主控环改向到 calibrator）
             encoderCalibrator.isTriggered = true;
             encoderCalibrator.Tick20kHz();
             encoderCalibrator.TickMainLoop();
@@ -173,6 +194,7 @@ void OnButton1Event(Button::Event _event)
 //            encoderCalibrator.TestFlash();
             break;
         case ButtonBase::CLICK:
+            // 短按：在 STOP 与上次运行模式之间切换
             printf("KEY1\r\n");
             if (motor.controller->modeRunning != Motor::MODE_STOP)
             {
@@ -187,6 +209,7 @@ void OnButton1Event(Button::Event _event)
 }
 
 
+// 按键 2：长按将当前运行模式下的设点归零；短按清除堆转报警。
 void OnButton2Event(Button::Event _event)
 {
     switch (_event)

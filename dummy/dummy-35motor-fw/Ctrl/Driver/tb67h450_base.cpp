@@ -1,3 +1,8 @@
+// ============================================================================
+//  tb67h450_base.cpp —— TB67H450 抽象基类实现（35 步进版本）
+// ----------------------------------------------------------------------------
+//  - 实现与 42motor 镜像。实际 GPIO/PWM 操作在派生类 TB67H450 中完成。
+// ============================================================================
 #include "tb67h450_base.h"
 #include "sin_map.h"
 
@@ -44,9 +49,9 @@ void TB67H450Base::SetFocCurrentVector(uint32_t _directionInCount, int32_t _curr
 void TB67H450Base::SetTwoCoilsCurrent(uint16_t _currentA_3300mAIn12Bits, uint16_t _currentB_3300mAIn12Bits)
 {
     /*
-     * After SetFocCurrentVector calculation a 12bits value was mapped to 0~3300mA.
-     * And due to used 0.1Ohm shank resistor, 0~3300mV V-ref means 0~3300mA CurrentSetPoint,
-     * For more details, see TB67H450 Datasheet page.10 .
+     * SetFocCurrentVector 计算后，12 bit 值映射为 0~3300 mA。
+     * 由于需使用 0.1 Ω 采样电阻，0~3300 mV 参考即表 0~3300 mA 设点。
+     * 详见 TB67H450 数据手册 P10。
      */
 
     DacOutputVoltage(_currentA_3300mAIn12Bits, _currentB_3300mAIn12Bits);

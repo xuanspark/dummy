@@ -1,3 +1,9 @@
+// ============================================================================
+//  tb67h450_stm32.cpp —— TB67H450 STM32 实现
+// ----------------------------------------------------------------------------
+//  - 通过 HAL_TIM_PWM_Start_IT + 直写 CCR 寄存器调整两相 PWM 占空比
+//  - 配合 sin_map 完成微步输出
+// ============================================================================
 #include "tb67h450_stm32.h"
 #include "tim.h"
 
@@ -5,15 +11,15 @@ void TB67H450::InitGpio()
 {
     GPIO_InitTypeDef GPIO_InitStruct = {0};
 
-    /* Signal Ports Clock Enable */
+    /* 信号 GPIO 端口时钟使能 */
     __HAL_RCC_GPIOA_CLK_ENABLE();
     __HAL_RCC_GPIOB_CLK_ENABLE();
 
-    /*Configure Signal pin Output Level */
+    /* 配置信号引脚初始输出电平 */
     HAL_GPIO_WritePin(GPIOA, HW_ELEC_BM_Pin | HW_ELEC_BP_Pin | HW_ELEC_AM_Pin | HW_ELEC_AP_Pin,
                       GPIO_PIN_RESET);
 
-    /*Configure Signal pins : PAPin PAPin PAPin PAPin */
+    /* 配置信号引脚：PA 口多个引脚 */
     GPIO_InitStruct.Pin = HW_ELEC_BM_Pin | HW_ELEC_BP_Pin | HW_ELEC_AM_Pin | HW_ELEC_AP_Pin;
     GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
     GPIO_InitStruct.Pull = GPIO_NOPULL;

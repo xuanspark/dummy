@@ -1,3 +1,10 @@
+// ============================================================================
+//  eeprom_interface.h —— STM32 Flash 模拟 EEPROM 的 Arduino 风格薄壳（42 子板）
+// ----------------------------------------------------------------------------
+//  - 与 dummy-ref-core-fw 同名文件功能基本相同，但类型名为 EEPROM（而非 EEPROMClass）
+//  - 实际 Flash 抹写由 emulated_eeprom 提供
+//  - 上层在 main.cpp 中通过 EEPROM eeprom; eeprom.get(0, boardConfig) 读写
+// ============================================================================
 #ifndef FlashStorage_STM32_h
 #define FlashStorage_STM32_h
 
@@ -10,7 +17,7 @@
 
 #define FLASH_STORAGE_STM32_VERSION     "FlashStorage_STM32 v1.1.0"
 
-// Only use this with emulated EEPROM, without integrated EEPROM
+// 仅用于“无内置 EEPROM、需 Flash 模拟”的芯片（F1xx 在本项目使用）。
 #if !defined(DATA_EEPROM_BASE)
 
 #include "emulated_eeprom.h"
@@ -23,9 +30,9 @@ public:
     {}
 
     /**
-     * Read an eeprom cell
-     * @param index
-     * @return value
+     * 读一个 EEPROM 单元
+     * @param address 字节偏移
+     * @return 该偏移上的字节值
      */
     uint8_t read(int address)
     {
@@ -36,9 +43,7 @@ public:
     }
 
     /**
-     * Update an eeprom cell
-     * @param index
-     * @param value
+     * 更新一个 EEPROM 单元（仅在值变化时标记 dirty）
      */
     void update(int address, uint8_t value)
     {
@@ -53,9 +58,7 @@ public:
     }
 
     /**
-     * Write value to an eeprom cell
-     * @param index
-     * @param value
+     * 写入一个 EEPROM 单元（update 的别名，Arduino 生态习惯写法）
      */
     void write(int address, uint8_t value)
     {
@@ -63,15 +66,15 @@ public:
     }
 
     /**
-     * Update eeprom cells from an object
-     * @param index
-     * @param value
+     * 以字节拷贝从 EEPROM 读取一个对象
+     * @param idx 起始字节偏移
+     * @param t   接收目标，调用后被填足
      */
-    //Functionality to 'get' and 'put' objects to and from EEPROM.
+    // get / put 接口：在 EEPROM 与任意类型对象之间传递字节。
     template<typename T>
     T &get(int _offset, T &_t)
     {
-        // Copy the data from the flash to the buffer if not yet
+        // 若尚未从 Flash 加载到内存缓冲区，先初始化
         if (!_initialized)
             init();
 
@@ -89,7 +92,7 @@ public:
     template<typename T>
     const T &put(int idx, const T &t)
     {
-        // Copy the data from the flash to the buffer if not yet
+        // 若尚未从 Flash 加载到内存缓冲区，先初始化
         if (!_initialized)
             init();
 
@@ -104,14 +107,14 @@ public:
 
         if (_commitASAP)
         {
-            // Save the data from the buffer to the flash right away
+            // 立即把缓冲区刷入 Flash（默认行为）
             eeprom_buffer_flush();
 
             _dirtyBuffer = false;
             _validEEPROM = true;
         } else
         {
-            // Delay saving the data from the buffer to the flash. Just flag and wait for commit() later
+            // 延迟提交：仅记 dirty，等调用方后续调 commit()
             _dirtyBuffer = true;
         }
 
@@ -119,8 +122,7 @@ public:
     }
 
     /**
-     * Check whether the eeprom data is valid
-     * @return true, if eeprom data is valid (has been written at least once), false if not
+     * 判断 EEPROM 中是否存有有效数据（至少写入过一次）
      */
     bool isValid()
     {
@@ -128,8 +130,8 @@ public:
     }
 
     /**
-     * Write previously made eeprom changes to the underlying flash storage
-     * Use this with care: Each and every commit will harm the flash and reduce it's lifetime (like with every flash memory)
+     * 将迭代修改一次刷入 Flash。谨慎调用：
+     * 每次 commit 都会损耗 Flash 寿命（与所有 Flash 存储器一样）。
      */
     void commit()
     {
@@ -138,7 +140,7 @@ public:
 
         if (_dirtyBuffer)
         {
-            // Save the data from the buffer to the flash
+            // 把缓冲区写回 Flash（耗时操作）
             eeprom_buffer_flush();
 
             _dirtyBuffer = false;
@@ -158,7 +160,7 @@ private:
 
     void init()
     {
-        // Copy the data from the flash to the buffer
+        // 从 Flash 拷一个页到内存缓冲区（仅启动后第一次调用）
         eeprom_buffer_fill();
         _initialized = true;
     }

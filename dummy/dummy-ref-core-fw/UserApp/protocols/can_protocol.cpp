@@ -1,3 +1,11 @@
+// ============================================================================
+//  can_protocol.cpp —— ref 主控 CAN 回包分发
+// ----------------------------------------------------------------------------
+//  - 解码电机子板的标准帧回包并更新对应 CtrlStepMotor 状态
+//  - 处理角度、DCE 参数、在线心跳、运动完成等实时反馈
+//  - 该文件只消费子板回包，主动下发命令由 CtrlStepMotor 封装完成
+// ============================================================================
+
 #include "common_inc.h"
 
 
@@ -28,7 +36,8 @@ void OnCanMessage(CAN_context* canCtx, CAN_RxHeaderTypeDef* rxHeader, uint8_t* d
             switch (cmd)
             {
                 case 0x23:
-                    dummy.hand2->UpdateAngleCallback(*(float*) (data), data[4]);
+                    // 35hand 在 data[5] 填 isStalled；老 35motor 该字节恒为 0，向后兼容
+                    dummy.hand2->UpdateAngleCallback(*(float*) (data), data[4], data[5]);
                     dummy.hand2->OnlineCallback();
                     break;
                 case 0x25:
