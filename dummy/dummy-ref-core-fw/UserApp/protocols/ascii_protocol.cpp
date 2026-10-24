@@ -330,8 +330,9 @@ void OnUsbAsciiCmd(const char* _cmd, size_t _len, StreamSink &_responseChannel)
         else if (MatchExact(_cmd, "#SET_DCE_KV"))
         {
             uint32_t kp; uint32_t node;
-            sscanf(_cmd, "#SET_DCE_KV %lu %lu", &node, &kp);
-            if (node >= 1 && node <= 6){
+            if (sscanf(_cmd, "#SET_DCE_KV %lu %lu", &node, &kp) != 2) {
+                Respond(_responseChannel, "SetDceKv Error: use #SET_DCE_KV <node> <val>");
+            } else if (node >= 1 && node <= 6){
                 dummy.motorJ[node]->SetDceKv(kp);
                 Respond(_responseChannel, "SetDceKv OK node=%lu val=%lu", node, kp);
             } else {
@@ -341,8 +342,9 @@ void OnUsbAsciiCmd(const char* _cmd, size_t _len, StreamSink &_responseChannel)
         else if (MatchExact(_cmd, "#SET_DCE_KP"))
         {
             uint32_t kp; uint32_t node;
-            sscanf(_cmd, "#SET_DCE_KP %lu %lu", &node, &kp);
-            if (node >= 1 && node <= 6){
+            if (sscanf(_cmd, "#SET_DCE_KP %lu %lu", &node, &kp) != 2) {
+                Respond(_responseChannel, "SetDceKp Error: use #SET_DCE_KP <node> <val>");
+            } else if (node >= 1 && node <= 6){
                 dummy.motorJ[node]->SetDceKp(kp);
                 Respond(_responseChannel, "SetDceKp OK node=%lu val=%lu", node, kp);
             } else {
@@ -351,8 +353,9 @@ void OnUsbAsciiCmd(const char* _cmd, size_t _len, StreamSink &_responseChannel)
         } else if (MatchExact(_cmd, "#SET_DCE_KI"))
         {
             uint32_t kp; uint32_t node;
-            sscanf(_cmd, "#SET_DCE_KI %lu %lu", &node, &kp);
-            if (node >= 1 && node <= 6){
+            if (sscanf(_cmd, "#SET_DCE_KI %lu %lu", &node, &kp) != 2) {
+                Respond(_responseChannel, "SetDceKi Error: use #SET_DCE_KI <node> <val>");
+            } else if (node >= 1 && node <= 6){
                 dummy.motorJ[node]->SetDceKi(kp);
                 Respond(_responseChannel, "SetDceKi OK node=%lu val=%lu", node, kp);
             } else {
@@ -361,8 +364,9 @@ void OnUsbAsciiCmd(const char* _cmd, size_t _len, StreamSink &_responseChannel)
         } else if (MatchExact(_cmd, "#SET_DCE_KD"))
         {
             uint32_t kp; uint32_t node;
-            sscanf(_cmd, "#SET_DCE_KD %lu %lu", &node, &kp);
-            if (node >= 1 && node <= 6){
+            if (sscanf(_cmd, "#SET_DCE_KD %lu %lu", &node, &kp) != 2) {
+                Respond(_responseChannel, "SetDceKd Error: use #SET_DCE_KD <node> <val>");
+            } else if (node >= 1 && node <= 6){
                 dummy.motorJ[node]->SetDceKd(kp);
                 Respond(_responseChannel, "SetDceKd OK node=%lu val=%lu", node, kp);
             } else {
@@ -415,9 +419,12 @@ void OnUsbAsciiCmd(const char* _cmd, size_t _len, StreamSink &_responseChannel)
         } else if (MatchExact(_cmd, "#CMDMODE"))
         {
             uint32_t mode;
-            sscanf(_cmd, "#CMDMODE %lu", &mode);
-            dummy.SetCommandMode(mode);
-            Respond(_responseChannel, "CmdMode OK mode=%lu", mode);
+            if (sscanf(_cmd, "#CMDMODE %lu", &mode) != 1) {
+                Respond(_responseChannel, "CmdMode Error: use #CMDMODE <mode>");
+            } else {
+                dummy.SetCommandMode(mode);
+                Respond(_responseChannel, "CmdMode OK mode=%lu", mode);
+            }
         }
         else if (MatchExact(_cmd, "#OFFSET_J"))
         {
@@ -470,8 +477,9 @@ void OnUsbAsciiCmd(const char* _cmd, size_t _len, StreamSink &_responseChannel)
         else if (MatchExact(_cmd, "#ACC_J"))
         {
             float S; uint32_t node;
-            sscanf(_cmd, "#ACC_J %lu %f", &node, &S);
-            if (node >= 1 && node <= 7){
+            if (sscanf(_cmd, "#ACC_J %lu %f", &node, &S) != 2) {
+                Respond(_responseChannel, "AccJ Error: use #ACC_J <node> <val>");
+            } else if (node >= 1 && node <= 7){
                 dummy.motorJ[node]->SetAcceleration(S);
                 Respond(_responseChannel, "AccJ OK node=%lu val=%.3f", node, S);
             } else {
@@ -481,8 +489,9 @@ void OnUsbAsciiCmd(const char* _cmd, size_t _len, StreamSink &_responseChannel)
         else if (MatchExact(_cmd, "#SPEED_J"))
         {
             float S; uint32_t node;
-            sscanf(_cmd, "#SPEED_J %lu %f", &node, &S);
-            if (node >= 1 && node <= 7){
+            if (sscanf(_cmd, "#SPEED_J %lu %f", &node, &S) != 2) {
+                Respond(_responseChannel, "SpeedJ Error: use #SPEED_J <node> <val>");
+            } else if (node >= 1 && node <= 7){
                 dummy.motorJ[node]->SetVelocityLimit(S);
                 Respond(_responseChannel, "SpeedJ OK node=%lu val=%.3f", node, S);
             } else {
@@ -492,12 +501,32 @@ void OnUsbAsciiCmd(const char* _cmd, size_t _len, StreamSink &_responseChannel)
         else if (MatchExact(_cmd, "#I_LIMIT_J"))
         {
             float I; uint32_t node;
-            sscanf(_cmd, "#I_LIMIT_J %lu %f", &node, &I);
-            if (node >= 1 && node <= 7){
+            if (sscanf(_cmd, "#I_LIMIT_J %lu %f", &node, &I) != 2) {
+                Respond(_responseChannel, "ILimitJ Error: use #I_LIMIT_J <node> <val>");
+            } else if (node >= 1 && node <= 7){
                 dummy.motorJ[node]->SetCurrentLimit(I);
                 Respond(_responseChannel, "ILimitJ OK node=%lu val=%.3f", node, I);
             } else {
                 Respond(_responseChannel, "ILimitJ Error: bad node=%lu", node);
+            }
+        }
+        else if (MatchExact(_cmd, "#STATUS"))
+        {
+            uint32_t now = HAL_GetTick();
+            Respond(_responseChannel, "Status OK STATE:%s CAN_RX:%lu CAN_DROP:%lu",
+                    StateName((int)dummy.robotState), dummy.canRxTotal, dummy.canDroppedFrames);
+            for (int n = 1; n <= 6; n++)
+            {
+                CtrlStepMotor* m = dummy.motorJ[n];
+                uint32_t age = (m && m->lastResponseTick) ? (now - m->lastResponseTick) : 0xFFFFFFFF;
+                Respond(_responseChannel, "J[%d] %s age=%lums", n,
+                        (m && m->isOnline) ? "OL" : "NL", age);
+            }
+            if (dummy.hand2 != nullptr)
+            {
+                uint32_t age = dummy.hand2->lastResponseTick ? (now - dummy.hand2->lastResponseTick) : 0xFFFFFFFF;
+                Respond(_responseChannel, "HD[7] %s age=%lums",
+                        dummy.hand2->isOnline ? "OL" : "NL", age);
             }
         }
         else if (MatchExact(_cmd, "#ONLINE"))
@@ -609,8 +638,10 @@ void OnUsbAsciiCmd(const char* _cmd, size_t _len, StreamSink &_responseChannel)
     } else if (_cmd[0] == '>' || _cmd[0] == '@' || _cmd[0] == '&')
     {
         uint32_t freeSize = dummy.commandHandler.Push(_cmd);
-        // Push 返回值：剩余空位、或拒绝码（0xFC=not_homed, 0xFD=not_enabled, 0xFE=bad_state, 0xFF=full）
-        if (freeSize == 0xFC)
+        // Push 返回值：剩余空位、或拒绝码（0xFB=too_long, 0xFC=not_homed, 0xFD=not_enabled, 0xFE=bad_state, 0xFF=full）
+        if (freeSize == 0xFB)
+            Respond(_responseChannel, "Move Error: too_long");
+        else if (freeSize == 0xFC)
             Respond(_responseChannel, "Move Error: not_homed");
         else if (freeSize == 0xFD)
             Respond(_responseChannel, "Move Error: not_enabled");
@@ -913,9 +944,12 @@ void OnUart4AsciiCmd(const char* _cmd, size_t _len, StreamSink &_responseChannel
         } else if (MatchExact(_cmd, "#CMDMODE"))
         {
             uint32_t mode;
-            sscanf(_cmd, "#CMDMODE %lu", &mode);
-            dummy.SetCommandMode(mode);
-            Respond(_responseChannel, "CmdMode OK mode=%lu", mode);
+            if (sscanf(_cmd, "#CMDMODE %lu", &mode) != 1) {
+                Respond(_responseChannel, "CmdMode Error: use #CMDMODE <mode>");
+            } else {
+                dummy.SetCommandMode(mode);
+                Respond(_responseChannel, "CmdMode OK mode=%lu", mode);
+            }
         } else if (MatchExact(_cmd, "#REBOOT"))
         {
             uint32_t node;
@@ -998,6 +1032,24 @@ void OnUart4AsciiCmd(const char* _cmd, size_t _len, StreamSink &_responseChannel
             }
             else
                 Respond(_responseChannel, "OffsetJ Error: use #OFFSET_J <1-7|all>");
+        } else if (MatchExact(_cmd, "#STATUS"))
+        {
+            uint32_t now = HAL_GetTick();
+            Respond(_responseChannel, "Status OK STATE:%s CAN_RX:%lu CAN_DROP:%lu",
+                    StateName((int)dummy.robotState), dummy.canRxTotal, dummy.canDroppedFrames);
+            for (int n = 1; n <= 6; n++)
+            {
+                CtrlStepMotor* m = dummy.motorJ[n];
+                uint32_t age = (m && m->lastResponseTick) ? (now - m->lastResponseTick) : 0xFFFFFFFF;
+                Respond(_responseChannel, "J[%d] %s age=%lums", n,
+                        (m && m->isOnline) ? "OL" : "NL", age);
+            }
+            if (dummy.hand2 != nullptr)
+            {
+                uint32_t age = dummy.hand2->lastResponseTick ? (now - dummy.hand2->lastResponseTick) : 0xFFFFFFFF;
+                Respond(_responseChannel, "HD[7] %s age=%lums",
+                        dummy.hand2->isOnline ? "OL" : "NL", age);
+            }
         } else if (MatchExact(_cmd, "#ONLINE"))
         {
             uint32_t node;
@@ -1088,8 +1140,9 @@ void OnUart4AsciiCmd(const char* _cmd, size_t _len, StreamSink &_responseChannel
         else if (MatchExact(_cmd, "#SET_DCE_KV"))
         {
             uint32_t kp; uint32_t node;
-            sscanf(_cmd, "#SET_DCE_KV %lu %lu", &node, &kp);
-            if (node >= 1 && node <= 6) {
+            if (sscanf(_cmd, "#SET_DCE_KV %lu %lu", &node, &kp) != 2) {
+                Respond(_responseChannel, "SetDceKv Error: use #SET_DCE_KV <node> <val>");
+            } else if (node >= 1 && node <= 6) {
                 dummy.motorJ[node]->SetDceKv(kp);
                 Respond(_responseChannel, "SetDceKv OK node=%lu val=%lu", node, kp);
             } else {
@@ -1099,8 +1152,9 @@ void OnUart4AsciiCmd(const char* _cmd, size_t _len, StreamSink &_responseChannel
         else if (MatchExact(_cmd, "#SET_DCE_KP"))
         {
             uint32_t kp; uint32_t node;
-            sscanf(_cmd, "#SET_DCE_KP %lu %lu", &node, &kp);
-            if (node >= 1 && node <= 6) {
+            if (sscanf(_cmd, "#SET_DCE_KP %lu %lu", &node, &kp) != 2) {
+                Respond(_responseChannel, "SetDceKp Error: use #SET_DCE_KP <node> <val>");
+            } else if (node >= 1 && node <= 6) {
                 dummy.motorJ[node]->SetDceKp(kp);
                 Respond(_responseChannel, "SetDceKp OK node=%lu val=%lu", node, kp);
             } else {
@@ -1110,8 +1164,9 @@ void OnUart4AsciiCmd(const char* _cmd, size_t _len, StreamSink &_responseChannel
         else if (MatchExact(_cmd, "#SET_DCE_KI"))
         {
             uint32_t kp; uint32_t node;
-            sscanf(_cmd, "#SET_DCE_KI %lu %lu", &node, &kp);
-            if (node >= 1 && node <= 6) {
+            if (sscanf(_cmd, "#SET_DCE_KI %lu %lu", &node, &kp) != 2) {
+                Respond(_responseChannel, "SetDceKi Error: use #SET_DCE_KI <node> <val>");
+            } else if (node >= 1 && node <= 6) {
                 dummy.motorJ[node]->SetDceKi(kp);
                 Respond(_responseChannel, "SetDceKi OK node=%lu val=%lu", node, kp);
             } else {
@@ -1121,8 +1176,9 @@ void OnUart4AsciiCmd(const char* _cmd, size_t _len, StreamSink &_responseChannel
         else if (MatchExact(_cmd, "#SET_DCE_KD"))
         {
             uint32_t kp; uint32_t node;
-            sscanf(_cmd, "#SET_DCE_KD %lu %lu", &node, &kp);
-            if (node >= 1 && node <= 6) {
+            if (sscanf(_cmd, "#SET_DCE_KD %lu %lu", &node, &kp) != 2) {
+                Respond(_responseChannel, "SetDceKd Error: use #SET_DCE_KD <node> <val>");
+            } else if (node >= 1 && node <= 6) {
                 dummy.motorJ[node]->SetDceKd(kp);
                 Respond(_responseChannel, "SetDceKd OK node=%lu val=%lu", node, kp);
             } else {
@@ -1132,8 +1188,9 @@ void OnUart4AsciiCmd(const char* _cmd, size_t _len, StreamSink &_responseChannel
         else if (MatchExact(_cmd, "#ACC_J"))
         {
             float S; uint32_t node;
-            sscanf(_cmd, "#ACC_J %lu %f", &node, &S);
-            if (node >= 1 && node <= 7) {
+            if (sscanf(_cmd, "#ACC_J %lu %f", &node, &S) != 2) {
+                Respond(_responseChannel, "AccJ Error: use #ACC_J <node> <val>");
+            } else if (node >= 1 && node <= 7) {
                 dummy.motorJ[node]->SetAcceleration(S);
                 Respond(_responseChannel, "AccJ OK node=%lu val=%.3f", node, S);
             } else {
@@ -1143,8 +1200,9 @@ void OnUart4AsciiCmd(const char* _cmd, size_t _len, StreamSink &_responseChannel
         else if (MatchExact(_cmd, "#SPEED_J"))
         {
             float S; uint32_t node;
-            sscanf(_cmd, "#SPEED_J %lu %f", &node, &S);
-            if (node >= 1 && node <= 7) {
+            if (sscanf(_cmd, "#SPEED_J %lu %f", &node, &S) != 2) {
+                Respond(_responseChannel, "SpeedJ Error: use #SPEED_J <node> <val>");
+            } else if (node >= 1 && node <= 7) {
                 dummy.motorJ[node]->SetVelocityLimit(S);
                 Respond(_responseChannel, "SpeedJ OK node=%lu val=%.3f", node, S);
             } else {
@@ -1154,8 +1212,9 @@ void OnUart4AsciiCmd(const char* _cmd, size_t _len, StreamSink &_responseChannel
         else if (MatchExact(_cmd, "#I_LIMIT_J"))
         {
             float I; uint32_t node;
-            sscanf(_cmd, "#I_LIMIT_J %lu %f", &node, &I);
-            if (node >= 1 && node <= 7) {
+            if (sscanf(_cmd, "#I_LIMIT_J %lu %f", &node, &I) != 2) {
+                Respond(_responseChannel, "ILimitJ Error: use #I_LIMIT_J <node> <val>");
+            } else if (node >= 1 && node <= 7) {
                 dummy.motorJ[node]->SetCurrentLimit(I);
                 Respond(_responseChannel, "ILimitJ OK node=%lu val=%.3f", node, I);
             } else {
@@ -1177,7 +1236,9 @@ void OnUart4AsciiCmd(const char* _cmd, size_t _len, StreamSink &_responseChannel
     } else if (_cmd[0] == '>' || _cmd[0] == '@' || _cmd[0] == '&')
     {
         uint32_t freeSize = dummy.commandHandler.Push(_cmd);
-        if (freeSize == 0xFC)
+        if (freeSize == 0xFB)
+            Respond(_responseChannel, "Move Error: too_long");
+        else if (freeSize == 0xFC)
             Respond(_responseChannel, "Move Error: not_homed");
         else if (freeSize == 0xFD)
             Respond(_responseChannel, "Move Error: not_enabled");

@@ -38,6 +38,67 @@ void uart_write(const void *buf, size_t len);
 char *config_read(void);
 void config_write(struct mg_str config);
 
+// ---- T08: 配置接口鉴权与维护模式 ----
+#define CONFIG_AUTH_TOKEN "dummy-maint-2024"  // 生产环境应从 NVS 读取或使用更安全的方案
+static bool s_maintenance_mode = false;  // 维护模式：仅开启时允许修改 UART 引脚/baud
+
+// 验证 HTTP 请求中的 Authorization: Bearer <token>
+static bool check_auth(struct mg_http_message *hm) {
+  struct mg_str *auth = mg_http_get_header(hm, "Authorization");
+  if (auth == NULL) return false;
+  struct mg_str expected = mg_str("Bearer " CONFIG_AUTH_TOKEN);
+  return mg_strcmp(*auth, expected) == 0;
+}
+
+// baud 率白名单
+static const int s_valid_bauds[] = {9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600};
+static bool is_valid_baud(int baud) {
+  for (size_t i = 0; i < sizeof(s_valid_bauds)/sizeof(s_valid_bauds[0]); i++)
+    if (s_valid_bauds[i] == baud) return true;
+  return false;
+}
+
+// ---- T09: UART 写入网关 —— 长度、字符集、频率限制 ----
+#define UART_LINE_MAX   63   // 与 ref-core 队列消息体一致（含 \0 = 64）
+#define UART_RATE_MS    20   // 最小命令间隔（ms），防止 burst
+
+static uint64_t s_last_uart_write_ms = 0;
+
+// 检查 buf 是否全部为可打印 ASCII（0x20~0x7E）+ \r + \n
+static bool is_printable_ascii(const char *buf, size_t len) {
+  for (size_t i = 0; i < len; i++) {
+    unsigned char ch = (unsigned char)buf[i];
+    if (ch >= 0x20 && ch <= 0x7E) continue;  // 可打印
+    if (ch == '\r' || ch == '\n') continue;   // 行终止符
+    return false;
+  }
+  return true;
+}
+
+// 受保护的 UART 写入：拒绝超长、非法字符、高频命令
+static bool uart_write_validated(const void *buf, size_t len) {
+  if (len == 0) return false;
+  // 长度限制
+  if (len > UART_LINE_MAX) {
+    MG_ERROR(("UART reject: too long (%lu > %d)", (unsigned long)len, UART_LINE_MAX));
+    return false;
+  }
+  // 字符集限制
+  if (!is_printable_ascii((const char *)buf, len)) {
+    MG_ERROR(("UART reject: non-printable chars"));
+    return false;
+  }
+  // 频率限制
+  uint64_t now = mg_millis();
+  if (now - s_last_uart_write_ms < UART_RATE_MS) {
+    MG_ERROR(("UART reject: rate limited"));
+    return false;
+  }
+  s_last_uart_write_ms = now;
+  uart_write(buf, len);
+  return true;
+}
+
 // 若外部定义了 UART_API_IMPLEMENTED（如 ESP32 端 uart.c）则使用外部实现，
 // 否则使用下面以 stdin/stdout 为虚拟 UART 的桌面仿真版本
 #if defined(UART_API_IMPLEMENTED)
@@ -88,7 +149,7 @@ static void ws_fn(struct mg_connection *c, int ev, void *evd, void *fnd) {
     c->data[0] = 'W';  // When WS handhake is done, mark us as WS client
   } else if (ev == MG_EV_WS_MSG) {
     struct mg_ws_message *wm = (struct mg_ws_message *) evd;
-    uart_write(wm->data.ptr, wm->data.len);  // Send to UART
+    uart_write_validated(wm->data.ptr, wm->data.len);  // Send to UART (validated)
     c->recv.len = 0;                         // Discard received data
   } else if (ev == MG_EV_CLOSE) {
     if (c->is_listening) s_state.websocket.c = NULL;
@@ -102,7 +163,7 @@ static void tcp_fn(struct mg_connection *c, int ev, void *evd, void *fnd) {
     // c->is_hexdumping = 1;
     c->data[0] = 'T';  // When client is connected, mark us as TCP client
   } else if (ev == MG_EV_READ) {
-    uart_write(c->recv.buf, c->recv.len);  // Send to UART
+    uart_write_validated(c->recv.buf, c->recv.len);  // Send to UART (validated)
     c->recv.len = 0;                       // Discard received data
   } else if (ev == MG_EV_CLOSE) {
     if (c->is_listening) s_state.tcp.c = NULL;
@@ -130,7 +191,7 @@ static void mq_fn(struct mg_connection *c, int ev, void *evd, void *fnd) {
     mg_mqtt_sub(c, &sub_opts);  // Subscribe to RX topic
   } else if (ev == MG_EV_MQTT_MSG) {
     struct mg_mqtt_message *mm = evd;        // MQTT message
-    uart_write(mm->data.ptr, mm->data.len);  // Send to UART
+    uart_write_validated(mm->data.ptr, mm->data.len);  // Send to UART (validated)
   } else if (ev == MG_EV_CLOSE) {
     s_state.mqtt.c = NULL;
   }
@@ -233,9 +294,47 @@ void uart_bridge_fn(struct mg_connection *c, int ev, void *ev_data,
     if (mg_http_match_uri(hm, "/api/hi")) {
       mg_http_reply(c, 200, "", "hi\n");  // Testing endpoint
     } else if (mg_http_match_uri(hm, "/api/config/set")) {
-      config_apply(hm->body);
-      config_write(hm->body);
-      mg_http_reply(c, 200, "", "true\n");
+      // T08: 鉴权检查
+      if (!check_auth(hm)) {
+        mg_http_reply(c, 401, "", "{%m:%m}\n", mg_print_esc, 0, "error",
+                      mg_print_esc, 0, "unauthorized");
+      } else {
+        // T08: UART 引脚/baud 修改需要维护模式
+        double v;
+        bool wants_uart_change = false;
+        if (mg_json_get_num(hm->body, "$.rx", &v) ||
+            mg_json_get_num(hm->body, "$.tx", &v) ||
+            mg_json_get_num(hm->body, "$.baud", &v))
+          wants_uart_change = true;
+        if (wants_uart_change && !s_maintenance_mode) {
+          mg_http_reply(c, 403, "", "{%m:%m}\n", mg_print_esc, 0, "error",
+                        mg_print_esc, 0, "uart config requires maintenance mode");
+        } else {
+          // T08: baud 白名单校验
+          double baud_val;
+          if (mg_json_get_num(hm->body, "$.baud", &baud_val) && !is_valid_baud((int)baud_val)) {
+            mg_http_reply(c, 400, "", "{%m:%m}\n", mg_print_esc, 0, "error",
+                          mg_print_esc, 0, "invalid baud rate");
+          } else {
+            config_apply(hm->body);
+            config_write(hm->body);
+            mg_http_reply(c, 200, "", "true\n");
+          }
+        }
+      }
+    } else if (mg_http_match_uri(hm, "/api/maintenance")) {
+      // T08: 维护模式开关（需鉴权）
+      if (!check_auth(hm)) {
+        mg_http_reply(c, 401, "", "{%m:%m}\n", mg_print_esc, 0, "error",
+                      mg_print_esc, 0, "unauthorized");
+      } else {
+        bool enable = false;
+        mg_json_get_bool(hm->body, "$.enable", &enable);
+        s_maintenance_mode = enable;
+        MG_INFO(("Maintenance mode: %s", enable ? "ON" : "OFF"));
+        mg_http_reply(c, 200, "", "{%m:%s}\n", mg_print_esc, 0, "maintenance",
+                      enable ? "true" : "false");
+      }
     } else if (mg_http_match_uri(hm, "/api/config/get")) {
       mg_http_reply(c, 200, "Content-Type: application/json\r\n",
                     "{%m:{%m:%m,%m:%s},%m:{%m:%m,%m:%s},%m:{%m:%m,%m:%s},"

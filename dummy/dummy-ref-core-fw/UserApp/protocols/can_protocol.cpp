@@ -30,9 +30,20 @@ void OnCanMessage(CAN_context* canCtx, CAN_RxHeaderTypeDef* rxHeader, uint8_t* d
         uint8_t id = rxHeader->StdId >> 7; // 4Bits ID & 7Bits Msg
         uint8_t cmd = rxHeader->StdId & 0x7F; // 4Bits ID & 7Bits Msg
 
-        //new
-        if (id>6)
+        dummy.canRxTotal++;
+
+        // 节点 ID 边界过滤：id=0 为广播保留，id>7 为非法帧，均丢弃
+        if (id == 0 || id > 7)
         {
+            dummy.canDroppedFrames++;
+            return;
+        }
+
+        // id == 7：手爪节点
+        if (id == 7)
+        {
+            if (dummy.hand2 == nullptr)
+                return;  // 手爪未初始化，丢弃
             switch (cmd)
             {
                 case 0x23:
@@ -56,6 +67,7 @@ void OnCanMessage(CAN_context* canCtx, CAN_RxHeaderTypeDef* rxHeader, uint8_t* d
             return;
         }
 
+        // id == 1~6：关节电机节点
         /*----------------------- ↓ Add Your CAN1 Packet Protocol Here ↓ ------------------------*/
         switch (cmd)
         {

@@ -252,9 +252,13 @@ public:
     DOF6Kinematic::Pose6D_t currentPose6D = {};
     volatile uint8_t jointsStateFlag = 0b00000000;
     CommandMode commandMode = DEFAULT_COMMAND_MODE;
-    CtrlStepMotor* motorJ[7] = {nullptr};
+    CtrlStepMotor* motorJ[8] = {nullptr};
 //    CtrlStepMotor* hand2 = {nullptr};
     StepHand* hand2 = {nullptr};
+
+    // CAN 健康可观测性 (T10)
+    volatile uint32_t canDroppedFrames = 0;   // id==0 或 id>7 的丢弃帧计数
+    volatile uint32_t canRxTotal = 0;         // 总接收帧计数
 
 
     void Init();

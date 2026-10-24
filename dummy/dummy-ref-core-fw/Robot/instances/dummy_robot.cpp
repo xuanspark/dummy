@@ -40,6 +40,7 @@ DummyRobot::DummyRobot(CAN_HandleTypeDef* _hcan) :
     motorJ[5] = new CtrlStepMotor(_hcan, 5, true, 50, -100, 100);
     motorJ[6] = new CtrlStepMotor(_hcan, 6, true, 30, -180, 180);
     hand2 = new StepHand(_hcan, 7);
+    motorJ[7] = hand2;  // 手爪纳入 motorJ 统一索引，#ACC_J/#SPEED_J/#I_LIMIT_J node=7 不再越界
 
     dof6Solver = new DOF6Kinematic(0.134f, 0.035f, 0.146f, 0.117f, 0.052f, 0.0625f);
 //    dof6Solver = new DOF6Kinematic(0.109f, 0.035f, 0.146f, 0.115f, 0.052f, 0.072f);
@@ -51,6 +52,7 @@ DummyRobot::~DummyRobot()
     for (int j = 0; j <= 6; j++)
         delete motorJ[j];
 
+    // hand2 == motorJ[7]，只通过 hand2 释放，避免 double-free
     delete hand2;
     delete dof6Solver;
 }
@@ -698,6 +700,9 @@ uint32_t DummyRobot::CommandHandler::Push(const std::string &_cmd)
     // 未 home 拒绝（避免撞机）
     if (!context->IsHomed())
         return 0xFC; // rejected: not homed
+    // 超长命令拒绝（队列消息体 64 字节，含 \0）
+    if (_cmd.size() >= 64)
+        return 0xFB; // rejected: command too long
 
     osStatus_t status = osMessageQueuePut(commandFifo, _cmd.c_str(), 0U, 0U);
     if (status == osOK)
@@ -798,7 +803,12 @@ void DummyRobot::CommandHandler::Resume()
 std::string DummyRobot::CommandHandler::Pop(uint32_t timeout)
 {
     osStatus_t status = osMessageQueueGet(commandFifo, strBuffer, nullptr, timeout);
-
+    if (status != osOK)
+    {
+        strBuffer[0] = '\0';
+        return std::string{};
+    }
+    strBuffer[63] = '\0';  // 防御性截断，确保不会越界读
     return std::string{strBuffer};
 }
 
@@ -833,15 +843,22 @@ uint32_t DummyRobot::CommandHandler::ParseCommand(const std::string &_cmd)
                 if (_cmd[0] == '&')
                     argNum = sscanf(_cmd.c_str(), "&%f,%f,%f,%f,%f,%f,%f", joints, joints + 1, joints + 2,
                                     joints + 3, joints + 4, joints + 5, &speed);
+                bool ok = false;
                 if (argNum == 6)
                 {
-                    context->MoveJ(joints[0], joints[1], joints[2],
-                                   joints[3], joints[4], joints[5]);
+                    ok = context->MoveJ(joints[0], joints[1], joints[2],
+                                        joints[3], joints[4], joints[5]);
                 } else if (argNum == 7)
                 {
                     context->SetJointSpeed(speed);
-                    context->MoveJ(joints[0], joints[1], joints[2],
-                                   joints[3], joints[4], joints[5]);
+                    ok = context->MoveJ(joints[0], joints[1], joints[2],
+                                        joints[3], joints[4], joints[5]);
+                }
+                if (!ok)
+                {
+                    Respond(*usbStreamOutputPtr, "Move Error: bad_args");
+                    Respond(*uart4StreamOutputPtr, "Move Error: bad_args");
+                    break;
                 }
                 // Trigger a transmission immediately, in case IsMoving() returns false
                 context->MoveJoints(context->targetJoints);
@@ -862,18 +879,24 @@ uint32_t DummyRobot::CommandHandler::ParseCommand(const std::string &_cmd)
 
                 argNum = sscanf(_cmd.c_str(), "@%f,%f,%f,%f,%f,%f,%f", pose, pose + 1, pose + 2,
                                 pose + 3, pose + 4, pose + 5, &speed);
+                bool ok = false;
                 if (argNum == 6)
                 {
-                    context->MoveL(pose[0], pose[1], pose[2], pose[3], pose[4], pose[5]);
+                    ok = context->MoveL(pose[0], pose[1], pose[2], pose[3], pose[4], pose[5]);
                 } else if (argNum == 7)
                 {
                     context->SetJointSpeed(speed);
-                    context->MoveL(pose[0], pose[1], pose[2], pose[3], pose[4], pose[5]);
+                    ok = context->MoveL(pose[0], pose[1], pose[2], pose[3], pose[4], pose[5]);
                 }
-                context->NotifyWorkStart();
-                context->NotifyWorkDone();
-                Respond(*usbStreamOutputPtr, "Move OK");
-                Respond(*uart4StreamOutputPtr, "Move OK");
+                if (ok) {
+                    context->NotifyWorkStart();
+                    context->NotifyWorkDone();
+                    Respond(*usbStreamOutputPtr, "Move OK");
+                    Respond(*uart4StreamOutputPtr, "Move OK");
+                } else {
+                    Respond(*usbStreamOutputPtr, "Move Error: bad_args");
+                    Respond(*uart4StreamOutputPtr, "Move Error: bad_args");
+                }
             }
 
             break;

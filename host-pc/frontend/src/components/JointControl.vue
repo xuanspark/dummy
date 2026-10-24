@@ -38,6 +38,7 @@ let pending: ReturnType<typeof setTimeout> | null = null
 // Auto-query: poll joint position from the backend.
 const POLL_MS = 250
 let pollTimer: ReturnType<typeof setInterval> | null = null
+let polling = false  // 单飞保护：上一轮轮询未结束不发下一轮
 
 watch(autoQuery, (on) => {
   if (on) startPolling()
@@ -64,11 +65,17 @@ function startPolling() {
   pollTimer = setInterval(async () => {
     if (!store.isConnected || sending.value) return
     if (store.dryRun) return                       // skip polling in dry-run
-    // Poll joint + cartesian in parallel; each uses its own serialized
-    // transaction on the backend so they don't interfere.
-    const [jp, lp] = await Promise.allSettled([api.getJpos(), api.getLpos()])
-    if (jp.status === 'fulfilled') store.$patch({ jpos: jp.value })
-    if (lp.status === 'fulfilled') store.$patch({ lpos: lp.value })
+    if (polling) return                            // 上一轮未结束，跳过本轮
+    polling = true
+    try {
+      // Poll joint + cartesian in parallel; each uses its own serialized
+      // transaction on the backend so they don't interfere.
+      const [jp, lp] = await Promise.allSettled([api.getJpos(), api.getLpos()])
+      if (jp.status === 'fulfilled') store.$patch({ jpos: jp.value })
+      if (lp.status === 'fulfilled') store.$patch({ lpos: lp.value })
+    } finally {
+      polling = false
+    }
   }, POLL_MS)
 }
 function stopPolling() {

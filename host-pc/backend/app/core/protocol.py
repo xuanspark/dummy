@@ -8,12 +8,74 @@ Response conventions:
   - Failure: "<Cmd> Error: <reason>"
   - Asynchronous events (no command initiated): "Estop OK", "Resume OK",
     "Estop Cleared OK", etc.
+
+Error vocabulary (T12 — canonical reasons emitted by firmware):
+  - bad_args / use ...    →  ErrorCategory.BAD_ARGS       (参数错误)
+  - not_homed             →  ErrorCategory.NOT_READY      (未归零)
+  - not_enabled           →  ErrorCategory.NOT_READY      (未使能)
+  - state=...             →  ErrorCategory.STATE_BLOCKED  (状态不允许)
+  - bad_state             →  ErrorCategory.STATE_BLOCKED
+  - queue_full / too_long →  ErrorCategory.QUEUE_FULL     (队列满 / 超长)
+  - limit J* Max/Min      →  ErrorCategory.LIMIT_EXCEEDED (软限位)
+  - timeout               →  ErrorCategory.COMM_TIMEOUT   (通信超时)
 """
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from enum import Enum
 from typing import Optional
+
+
+# ---------- T12: error categories ----------
+
+class ErrorCategory(str, Enum):
+    BAD_ARGS = "bad_args"               # 参数错误 (use ..., bad node, sscanf 失败)
+    NOT_READY = "not_ready"             # 设备未就绪 (not_homed, not_enabled)
+    STATE_BLOCKED = "state_blocked"     # 状态机不允许 (state=PAUSED 等)
+    QUEUE_FULL = "queue_full"           # 命令队列满或单条超长
+    LIMIT_EXCEEDED = "limit_exceeded"   # 软限位 (limit J* Max/Min)
+    COMM_TIMEOUT = "comm_timeout"       # host-pc → 固件的超时
+    UNKNOWN = "unknown"                 # 未匹配上以上任意类别
+
+
+# 按优先级排序的匹配规则（先匹配更具体的）
+_ERROR_PATTERNS: tuple[tuple[re.Pattern[str], ErrorCategory], ...] = (
+    # NOT_READY 类
+    (re.compile(r"\bnot_homed\b", re.I),                  ErrorCategory.NOT_READY),
+    (re.compile(r"\bnot_enabled\b", re.I),                ErrorCategory.NOT_READY),
+    # QUEUE_FULL 类
+    (re.compile(r"\bqueue_full\b", re.I),                 ErrorCategory.QUEUE_FULL),
+    (re.compile(r"\bqueue too long\b", re.I),             ErrorCategory.QUEUE_FULL),
+    (re.compile(r"\btoo_long\b", re.I),                   ErrorCategory.QUEUE_FULL),
+    # STATE_BLOCKED 类
+    (re.compile(r"\bbad_state\b", re.I),                  ErrorCategory.STATE_BLOCKED),
+    (re.compile(r"\bstate\s*=", re.I),                    ErrorCategory.STATE_BLOCKED),
+    # LIMIT_EXCEEDED 类
+    (re.compile(r"\blimit\s+J\d+\s+(Max|Min)\b", re.I),   ErrorCategory.LIMIT_EXCEEDED),
+    (re.compile(r"\blimit_error\b", re.I),                ErrorCategory.LIMIT_EXCEEDED),
+    # COMM_TIMEOUT 类（host-pc 端注入，固件一般不直接吐）
+    (re.compile(r"\btimeout\b", re.I),                    ErrorCategory.COMM_TIMEOUT),
+    # BAD_ARGS 类（放在最后，触发条件最宽）
+    (re.compile(r"\buse\s+#?!?\w", re.I),                 ErrorCategory.BAD_ARGS),
+    (re.compile(r"\bbad\s+(node|args|target)\b", re.I),   ErrorCategory.BAD_ARGS),
+    (re.compile(r"\bmust\s+be\b", re.I),                  ErrorCategory.BAD_ARGS),
+)
+
+
+def classify_error(reason: str) -> ErrorCategory:
+    """Map a firmware error reason string to a canonical :class:`ErrorCategory`.
+
+    Returns :attr:`ErrorCategory.UNKNOWN` if no pattern matches — this is
+    intentional, so we can keep growing the vocabulary without breaking callers
+    that only inspect the category enum.
+    """
+    if not reason:
+        return ErrorCategory.UNKNOWN
+    for pattern, category in _ERROR_PATTERNS:
+        if pattern.search(reason):
+            return category
+    return ErrorCategory.UNKNOWN
 
 
 # ---------- response classification ----------
@@ -29,6 +91,8 @@ class Response:
     ok: bool
     rest: str = ""      # everything after "OK " (may be empty)
     error: str = ""     # populated when ok=False
+    # T12: 分类后的错误码（ok=True 时为 UNKNOWN，无意义）
+    error_category: ErrorCategory = field(default=ErrorCategory.UNKNOWN)
 
 
 def parse_response(line: str) -> Optional[Response]:
@@ -41,7 +105,11 @@ def parse_response(line: str) -> Optional[Response]:
         return Response(raw=line, tag=m["tag"], ok=True, rest=(m["rest"] or "").strip())
     m = _RX_ERR.match(line)
     if m:
-        return Response(raw=line, tag=m["tag"], ok=False, error=m["reason"].strip())
+        reason = m["reason"].strip()
+        return Response(
+            raw=line, tag=m["tag"], ok=False, error=reason,
+            error_category=classify_error(reason),
+        )
     return None  # unstructured log / banner
 
 
@@ -179,6 +247,7 @@ COMMAND_TAGS: dict[str, str] = {
     "#GETSPEED":      "GetSpeed",
     "#ONLINE":        "Online",
     "#GET_DCE":       "GetDce",
+    "#STATUS":        "Status",      # T10 — diagnostic summary (multi-line)
     "#SET_DCE_KP":    "SetDceKp",
     "#SET_DCE_KV":    "SetDceKv",
     "#SET_DCE_KI":    "SetDceKi",

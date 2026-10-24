@@ -87,11 +87,32 @@ class MotionLimitBody(BaseModel):
 
 # ---------- helper ----------
 
+# T12: 错误类别 → HTTP 状态码映射
+#   BAD_ARGS / NOT_READY / STATE_BLOCKED / QUEUE_FULL / LIMIT_EXCEEDED → 422 (业务校验)
+#   COMM_TIMEOUT                                                       → 504 (网关超时)
+#   UNKNOWN                                                            → 400 (旧行为兼容)
+_CATEGORY_HTTP_STATUS = {
+    "bad_args":        422,
+    "not_ready":       422,
+    "state_blocked":   422,
+    "queue_full":      503,
+    "limit_exceeded":  422,
+    "comm_timeout":    504,
+    "unknown":         400,
+}
+
+
 async def _run(coro):
     try:
         return await coro
     except RobotError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+        cat = getattr(e, "category", None)
+        cat_str = cat.value if cat is not None else "unknown"
+        status = _CATEGORY_HTTP_STATUS.get(cat_str, 400)
+        raise HTTPException(
+            status_code=status,
+            detail={"category": cat_str, "message": str(e)},
+        ) from e
 
 
 # ---------- lifecycle ----------
@@ -279,6 +300,18 @@ async def rgb_custom(body: RgbCustom, r: Robot = Depends(get_robot)):
 
 # ---------- diagnostics ----------
 
+@router.get("/diag/status")
+async def diag_status(r: Robot = Depends(get_robot)):
+    """``#STATUS`` — query CAN health, robot state, and per-node online age.
+
+    Response::
+
+        {"state": "NORMAL", "can_rx": 12345, "can_drop": 0,
+         "nodes": {1: {"online": true, "age_ms": 42}, ...}, "raw": [...]}
+    """
+    return await _run(r.get_status())
+
+
 @router.get("/diag/online")
 async def diag_online(node: Optional[int] = None, r: Robot = Depends(get_robot)):
     """``#ONLINE [node]`` — query node online status.
@@ -367,7 +400,23 @@ async def motion_limit(body: MotionLimitBody, r: Robot = Depends(get_robot)):
 
 # ---------- escape hatch ----------
 
+# T11: 危险命令前缀白名单 — raw 接口默认禁止这些命令，需显式传 maintenance=true
+_DANGEROUS_PREFIXES = (
+    "#OFFSET_J", "#SET_DCE_", "#CMDMODE", "#REBOOT",
+    "#ACC_J", "#SPEED_J", "#I_LIMIT_J",
+    "!CALIBRATION",
+)
+
+
 @router.post("/raw")
 async def raw(body: RawCmd, r: Robot = Depends(get_robot)):
+    cmd = body.command.strip()
+    # T11: 拦截危险命令
+    for prefix in _DANGEROUS_PREFIXES:
+        if cmd.upper().startswith(prefix.upper()):
+            raise HTTPException(
+                status_code=403,
+                detail=f"raw: '{prefix}' is a restricted command; use the dedicated API endpoint",
+            )
     resp = await _run(r.raw(body.command, body.timeout))
     return {"ok": resp.ok, "tag": resp.tag, "rest": resp.rest, "error": resp.error, "raw": resp.raw}
