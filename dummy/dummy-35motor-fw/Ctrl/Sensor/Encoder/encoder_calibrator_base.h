@@ -1,3 +1,9 @@
+// ============================================================================
+//  encoder_calibrator_base.h —— 编码器出厂 / 长按校准器抽象基类（35 步进版本）
+// ----------------------------------------------------------------------------
+//  - 与 42motor 镜像。主流程：驱动电机缓慢转一圈，记录编码器读数建映射表
+//  - 派生类 EncoderCalibrator 提供 STM32 Flash 写入操作的实现
+// ============================================================================
 #ifndef CTRL_STEP_FW_ENCODER_CALIBRATOR_BASE_H
 #define CTRL_STEP_FW_ENCODER_CALIBRATOR_BASE_H
 
@@ -79,7 +85,7 @@ private:
     static int32_t CycleDataAverage(const uint16_t* _data, uint16_t _length, int32_t _cyc);
 
 
-    /***** Port Specified Implements *****/
+    /***** 需由平台实现的接口 *****/
     virtual void BeginWriteFlash() = 0;
     virtual void EndWriteFlash() = 0;
     virtual void ClearFlash() = 0;

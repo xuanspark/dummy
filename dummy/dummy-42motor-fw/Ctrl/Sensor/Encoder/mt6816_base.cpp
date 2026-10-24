@@ -5,7 +5,7 @@ bool MT6816Base::Init()
     SpiInit();
     UpdateAngle();
 
-    // Check if the stored calibration data are valid
+    // 检查 Flash 中存储的校准数据是否有效
     angleData.rectifyValid = true;
     for (uint32_t i = 0; i < RESOLUTION; i++)
     {

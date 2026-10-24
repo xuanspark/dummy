@@ -1,41 +1,34 @@
 /*
-*
-* Zero-config node ID negotiation
+* 零配置节点 ID 协商
 * -------------------------------
 *
-* A heartbeat message is a message with a 8 byte unique serial number as payload.
-* A regular message is any message that is not a heartbeat message.
+* 心跳报文：负载为 8 字节唯一序列号的报文。
+* 普通报文：除心跳之外的任何报文。
 *
-* All nodes MUST obey these four rules:
+* 所有节点必须遵守以下四条规则：
 *
-* a) At a given point in time, a node MUST consider a node ID taken (by others)
-*   if any of the following is true:
-*     - the node received a (not self-emitted) heartbeat message with that node ID
-*       within the last second
-*     - the node attempted and failed at sending a heartbeat message with that
-*       node ID within the last second (failed in the sense of not ACK'd)
+* a) 某个时刻节点必须认为某 ID 已被其他节点占用，如果满足以下任一条件：
+*    - 在过去 1 秒内收到了带该 ID 且非本机发送的心跳报文
+*    - 在过去 1 秒内本机尝试发送该 ID 的心跳报文但失败（未被 ACK）
 *
-* b) At a given point in time, a node MUST NOT consider a node ID self-assigned
-*   if, within the last second, it did not succeed in sending a heartbeat
-*   message with that node ID.
+* b) 某个时刻节点必须认为某 ID 未被本机拥有，如果：
+*    在过去 1 秒内本机未成功发送过该 ID 的心跳报文。
 *
-* c) At a given point in time, a node MUST NOT send any heartbeat message with
-*   a node ID that is taken.
+* c) 某个时刻节点不得发送带被占用 ID 的心跳报文。
 *
-* d) At a given point in time, a node MUST NOT send any regular message with
-*   a node ID that is not self-assigned.
+* d) 某个时刻节点不得发送带未本机拥有 ID 的普通报文。
 *
-* Hardware allocation
+* 硬件资源分配
 * -------------------
-*   RX FIFO0:
-*       - filter bank 0: heartbeat messages
+*   RX FIFO0：
+*       - filter bank 0：心跳报文
 */
 
 #include "common_inc.h"
 #include <stm32f4xx_hal.h>
 #include <cmsis_os.h>
 
-// defined in can.c
+// 定义于 CubeMX 生成的 can.c
 extern CAN_HandleTypeDef hcan1;
 extern CAN_HandleTypeDef hcan2;
 
@@ -67,7 +60,7 @@ bool StartCanServer(CAN_TypeDef* hcan)
         ctxs = &can2Ctx;
         ctxs->handle = &hcan2;
     } else
-        return false; // fail if none of the above checks matched
+        return false; // 上面两个判断都不命中，返回失败
 
     HAL_StatusTypeDef status;
 
@@ -76,7 +69,7 @@ bool StartCanServer(CAN_TypeDef* hcan)
     osSemaphoreDef(sem_send_heartbeat);
     ctxs->sem_send_heartbeat = osSemaphoreNew(1, 0, osSemaphore(sem_send_heartbeat));
 
-    //// Set up filter
+    //// 设置接收过滤器（全接受）
     CAN_FilterTypeDef sFilterConfig = {
         .FilterIdHigh = 0x0000,
         .FilterIdLow = 0x0000,
@@ -85,7 +78,7 @@ bool StartCanServer(CAN_TypeDef* hcan)
         .FilterFIFOAssignment = CAN_RX_FIFO0,
         .FilterBank = 0,
         .FilterMode = CAN_FILTERMODE_IDMASK,
-        .FilterScale = CAN_FILTERSCALE_16BIT, // two 16-bit filters
+        .FilterScale = CAN_FILTERSCALE_16BIT, // 两个 16-bit 过滤器
         .FilterActivation = ENABLE,
         .SlaveStartFilterBank = 0
     };
@@ -100,7 +93,7 @@ bool StartCanServer(CAN_TypeDef* hcan)
     status = HAL_CAN_ActivateNotification(ctxs->handle,
                                           CAN_IT_TX_MAILBOX_EMPTY |
                                           CAN_IT_RX_FIFO0_MSG_PENDING | CAN_IT_RX_FIFO1_MSG_PENDING |
-                                          /* we probably only want this */
+                                          /* 实际主要依赖上面两项 "MSG_PENDING"，以下是安全冷备 */
                                           CAN_IT_RX_FIFO0_FULL | CAN_IT_RX_FIFO1_FULL |
                                           CAN_IT_RX_FIFO0_OVERRUN | CAN_IT_RX_FIFO1_OVERRUN |
                                           CAN_IT_WAKEUP | CAN_IT_SLEEP_ACK |
@@ -130,10 +123,28 @@ void tx_aborted_callback(CAN_HandleTypeDef* hcan, uint8_t mailbox_idx)
     if (!get_can_ctx(hcan))
         return;
     get_can_ctx(hcan)->TxMailboxAbortCallbackCnt++;
+
+    // 修复：abort 同样意味着邮箱不再持有该消息，必须释放对应 TX 信号量，
+    // 否则 CanSendMessage 中的 osSemaphoreAcquire 会永久阻塞 ASCII 处理线程。
+    if (hcan->Instance == CAN1)
+        osSemaphoreRelease(sem_can1_tx);
+    else if (hcan->Instance == CAN2)
+        osSemaphoreRelease(sem_can2_tx);
 }
 
 void tx_error(CAN_context* ctx, uint8_t mailbox_idx)
 {
+    // 修复：原本是空函数。CAN 总线上无节点应答时（例如 REF 板单飞），
+    // HAL_CAN_ErrorCallback 走 TX_TERR{0,1,2} 分支调到这里 —— 必须把
+    // 对应 CAN TX 信号量释放，否则配对的 osSemaphoreAcquire 永远等不到回调，
+    // 会拖死整个 ASCII 命令处理线程，使 #ONLINE / #GET_DCE 等触 CAN 命令把
+    // 后续所有命令拖累超时（host-pc 端表现为"中毒"）。
+    if (!ctx)
+        return;
+    if (ctx->handle->Instance == CAN1)
+        osSemaphoreRelease(sem_can1_tx);
+    else if (ctx->handle->Instance == CAN2)
+        osSemaphoreRelease(sem_can2_tx);
 }
 
 void HAL_CAN_TxMailbox0CompleteCallback(CAN_HandleTypeDef* hcan)
@@ -193,7 +204,7 @@ void HAL_CAN_ErrorCallback(CAN_HandleTypeDef* hcan)
     volatile uint32_t original_error = hcan->ErrorCode;
     (void) original_error;
 
-    // handle transmit errors in all three mailboxes
+    // 处理 3 个 TX 邮箱的发送错误（主要为 NAK / Bus-Off / 付错重传超限）
     if (hcan->ErrorCode & HAL_CAN_ERROR_TX_ALST0)
     {
         SET_BIT(hcan->Instance->sTxMailBox[0].TIR, CAN_TI0R_TXRQ);
@@ -236,15 +247,19 @@ void HAL_CAN_ErrorCallback(CAN_HandleTypeDef* hcan)
 
 void CanSendMessage(CAN_context* canCtx, uint8_t* txData, CAN_TxHeaderTypeDef* txHeader)
 {
+    // 第三道保险：超时改为 100ms，避免任何遗漏的"未释放信号量"路径再次拖死
+    // 调用线程。CAN 节点正常应答的典型耗时 < 1ms，100ms 已是极宽裕；超时即
+    // 安静放弃本次发送，让上层重试或被 dceQueryDone=false 反映为离线。
     osStatus semaphore_status;
     if (canCtx->handle->Instance == CAN1)
-        semaphore_status = osSemaphoreAcquire(sem_can1_tx, osWaitForever);
+        semaphore_status = osSemaphoreAcquire(sem_can1_tx, 100);
     else if (canCtx->handle->Instance == CAN2)
-        semaphore_status = osSemaphoreAcquire(sem_can2_tx, osWaitForever);
+        semaphore_status = osSemaphoreAcquire(sem_can2_tx, 100);
     else
         return;
 
     if (semaphore_status == osOK)
         HAL_CAN_AddTxMessage(canCtx->handle, txHeader, txData, &canCtx->last_heartbeat_mailbox);
+    // 拿不到就直接返回 —— 上层 osDelay + 回调超时已经能识别该节点没回包。
 }
 

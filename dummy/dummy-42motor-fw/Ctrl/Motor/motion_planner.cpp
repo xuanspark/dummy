@@ -1,3 +1,12 @@
+// ============================================================================
+//  motion_planner.cpp —— MotionPlanner 实现
+// ----------------------------------------------------------------------------
+//  三个内嵌跟踪器：
+//    - CurrentTracker  电流环目标平滑（按 ratedCurrentAcc 渐进）
+//    - VelocityTracker 速度环目标平滑（按 ratedVelocityAcc 渐进）
+//    - PositionTracker 位置环跟踪（梯形加减速曲线）
+//  各 tracker 由 Motor::CloseLoopControlTick 在 50 µs 周期内调用 Tick()。
+// ============================================================================
 #include "motion_planner.h"
 #include "math.h"
 
@@ -163,8 +172,8 @@ void MotionPlanner::PositionTracker::Init()
     SetVelocityAcc(context->config->ratedVelocityAcc);
 
     /*
-     *  Allow to locking-brake when velocity is lower than (speedLockingBrake).
-     *  The best value should be (ratedMoveAcc/1000)
+     *  速度低于 speedLockingBrake 时允许制动锁定。
+     *  推荐取值为 (ratedMoveAcc / 1000)。
      */
     speedLockingBrake = context->config->ratedVelocityAcc / 1000;
 }

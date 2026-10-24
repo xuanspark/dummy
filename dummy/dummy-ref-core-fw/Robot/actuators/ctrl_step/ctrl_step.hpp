@@ -1,3 +1,11 @@
+// ============================================================================
+//  ctrl_step.hpp —— CAN 步进电机节点抽象
+// ----------------------------------------------------------------------------
+//  - 定义 ref 主控侧访问 35/42 电机子板的高层接口
+//  - 统一角度单位、减速比、方向反转和软限位边界
+//  - 暴露 Fibre 调试接口，便于上位机实时读取和下发参数
+// ============================================================================
+
 #ifndef DUMMY_CORE_FW_CTRL_STEP_HPP
 #define DUMMY_CORE_FW_CTRL_STEP_HPP
 
@@ -28,6 +36,8 @@ public:
     bool inverseDirection;
     uint8_t reduction;
     State state = STOP;
+    // 子板最近一次回调上报的堵转标志（35hand 在 0x23 回包 byte[5] 填，老 35motor/42motor 该位为 0）
+    volatile bool isStalled = false;
 
     void SetAngle(float _angle);
     void SetAngleWithVelocityLimit(float _angle, float _vel);
@@ -47,6 +57,27 @@ public:
     void SetDceKv(int32_t _val);
     void SetDceKi(int32_t _val);
     void SetDceKd(int32_t _val);
+    // 实时 CAN 查询 DCE 参数（发送请求，由回调更新 dceXxx）
+    void QueryDceKp();
+    void QueryDceKv();
+    void QueryDceKi();
+    void QueryDceKd();
+    void QueryDceAll();   // 一次发4个请求
+    // 回调（由 can_protocol.cpp 调用）
+    void DceParamCallback(uint8_t paramId, int32_t value);
+    // 查询结果（回调更新，外部读取）
+    volatile int32_t dceKp = 0;
+    volatile int32_t dceKv = 0;
+    volatile int32_t dceKi = 0;
+    volatile int32_t dceKd = 0;
+    volatile bool    dceQueryDone = false;  // 标记本轮查询是否有回调
+
+    // ---- 在线检测 ----
+    void QueryOnline();                     // 发 CAN 探测帧
+    void OnlineCallback();                  // 回调标记在线
+    volatile bool isOnline = false;         // 当前在线状态
+    volatile uint32_t lastResponseTick = 0; // 最近一次回调的 tick
+
     void ApplyPositionAsHome();
     void SetEnableOnBoot(bool _enable);
     void SetEnableStallProtect(bool _enable);
@@ -55,7 +86,7 @@ public:
     void EraseConfigs();
 
     void UpdateAngle();
-    void UpdateAngleCallback(float _pos, bool _isFinished);
+    void UpdateAngleCallback(float _pos, bool _isFinished, bool _isStalled = false);
 
 
     // Communication protocol definitions

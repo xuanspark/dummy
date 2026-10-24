@@ -1,0 +1,68 @@
+# ===== 编译输出 / 构建产物 =====
+build/
+cmake-build-*/
+dist/
+
+# ===== 编译生成文件（嵌入式固件） =====
+*.o
+*.obj
+*.elf
+*.hex
+*.bin
+*.map
+*.d
+
+# ===== CMake 生成文件 =====
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+
+# ===== Python 缓存 / 虚拟环境 =====
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+*.egg-info/
+.venv/
+venv/
+
+# ===== Node / 前端 =====
+node_modules/
+*.tsbuildinfo
+
+# ===== host-pc 项目专属 =====
+host-pc/backend/exe.log
+host-pc/frontend/dev.log
+host-pc/frontend/dev.err
+
+# ===== 文档和测试文件夹 =====
+MD/
+test/__pycache__/
+test/*.pyc
+test/*.pyo
+test/*.log
+test/*.tmp
+test/*.bak
+test/output/
+test/results/
+
+# ===== IDE 配置 =====
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ===== 系统文件 =====
+.DS_Store
+Thumbs.db
+
+# ===== 驱动 / 大文件 =====
+CP210x_Universal_Windows_Driver.zip
+
+# ===== 备份目录 / 临时快照（不进任何远端） =====
+test/
+dummy-backup/
+dummy.bak.*/
+__pycache__/

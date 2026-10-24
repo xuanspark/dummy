@@ -1,3 +1,11 @@
+// ============================================================================
+//  main.cpp —— ref 主控用户应用入口
+// ----------------------------------------------------------------------------
+//  - 初始化通信、机器人对象、RGB、OLED/IMU 等用户层模块
+//  - 创建实时控制、通信处理、RGB 刷新与在线检测等 FreeRTOS 任务
+//  - 定时器中断只负责唤醒任务，耗时逻辑均放在线程上下文执行
+// ============================================================================
+
 #include "common_inc.h"
 
 
@@ -148,12 +156,15 @@ void ThreadRGBUpdate(void* argument) {
         if (dummy.GetRGBEnabled())
         {
             rgb.Run((RGB::Rgb_style_t)dummy.GetRGBMode());
-            osDelay(30);
         }else
         {
-            rgb.Run(RGB::ALLOff);
-            osDelay(30);
+            rgb.Run(RGB::MODE_OFF);
         }
+        // 自动模式 5 秒空闲回待机计时（每 tick 约30ms）
+        dummy.AutoModeIdleTick(30);
+        // 在线检测定时 tick（5 分钟，工作时不检测）
+        dummy.OnlineCheckTick(30);
+        osDelay(30);
     }
 }
 
@@ -174,6 +185,10 @@ void Main(void)
 
     // Init Robot.
     dummy.Init();
+    // 从 EEPROM 加载上次保存的 RGB 模式
+    dummy.LoadRGBModeFromEEPROM();
+    // 初始化异步系统命令线程（HOME/START/RESET/CLOSE 非阻塞执行）
+    dummy.InitSysCmdThread();
 
     // Init IMU.
     do

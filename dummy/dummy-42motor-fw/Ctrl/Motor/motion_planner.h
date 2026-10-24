@@ -1,3 +1,11 @@
+// ============================================================================
+//  motion_planner.h —— 运动规划器（梯形加减速 + 轨迹跟踪）
+// ----------------------------------------------------------------------------
+//  - 内含 CurrentTracker / VelocityTracker / PositionTracker 三个跟踪器
+//  - 控制频率 20 kHz（与 htim4 一致），周期 50 µs
+//  - Config_t 描述本板的运动学限制：额定电流 / 速度 / 加速度等
+//  - 由 Motor::CloseLoopControlTick 在每个 tick 调度
+// ============================================================================
 #ifndef CTRL_STEP_FW_MOTION_PLANNER_H
 #define CTRL_STEP_FW_MOTION_PLANNER_H
 

@@ -1,15 +1,24 @@
+// ============================================================================
+//  motor.cpp —— Motor 顶层对象与 Controller 嵌套类的实现（35 步进版本）
+// ----------------------------------------------------------------------------
+//  - Tick20kHz 是主控制环，由 main.cpp 的 htim4 以 50 µs 节拍调用
+//  - CloseLoopControlTick 在里面按 modeRunning 撑不同环路计算顺序
+//  - DCE/PID 运算与 FOC 打点软调都在 Calc*ToOutput 几个内部函数
+//  - 与 42motor 项目镜像
+// ============================================================================
 #include "configurations.h"
 #include "motor.h"
 
 #include <cmath>
 
 
+// Tick20kHz: 控制环主体，被 htim4 ISR 以 50 µs 节拍调。
 void Motor::Tick20kHz()
 {
-    // 1.Encoder data Update
+    // 1. 读编码器当前位置
     encoder->UpdateAngle();
 
-    // 2.Motor Control Update
+    // 2. 以读到的位置运行闭环控制
     CloseLoopControlTick();
 }
 
@@ -26,9 +35,10 @@ void Motor::AttachDriver(DriverBase* _driver)
 }
 
 
+// CloseLoopControlTick: 闭环控制主体。首次调用会对齐零点。
 void Motor::CloseLoopControlTick()
 {
-    /************************************ First Called ************************************/
+    /************************************ 首次调用 ************************************/
     static bool isFirstCalled = true;
     if (isFirstCalled)
     {
@@ -58,26 +68,26 @@ void Motor::CloseLoopControlTick()
         return;
     }
 
-    /********************************* Update Data *********************************/
+    /********************************* 更新数据 *********************************/
     int32_t deltaLapPosition;
 
-    // Read Encoder data
+    // 1. 读编码器数据
     controller->realLapPositionLast = controller->realLapPosition;
     controller->realLapPosition = encoder->angleData.rectifiedAngle;
 
-    // Lap-Position calculate
+    // 2. 计算跨圈位置
     deltaLapPosition = controller->realLapPosition - controller->realLapPositionLast;
     if (deltaLapPosition > MOTOR_ONE_CIRCLE_SUBDIVIDE_STEPS >> 1)
         deltaLapPosition -= MOTOR_ONE_CIRCLE_SUBDIVIDE_STEPS;
     else if (deltaLapPosition < -MOTOR_ONE_CIRCLE_SUBDIVIDE_STEPS >> 1)
         deltaLapPosition += MOTOR_ONE_CIRCLE_SUBDIVIDE_STEPS;
 
-    // Naive-Position calculate
+    // 3. 计算原始位置
     controller->realPositionLast = controller->realPosition;
     controller->realPosition += deltaLapPosition;
 
-    /********************************* Estimate Data *********************************/
-    // Estimate Velocity
+    /********************************* 估计数据 *********************************/
+    // 估计速度
     controller->estVelocityIntegral += (
         (controller->realPosition - controller->realPositionLast) * motionPlanner.CONTROL_FREQUENCY
         + ((controller->estVelocity << 5) - controller->estVelocity)
@@ -85,14 +95,14 @@ void Motor::CloseLoopControlTick()
     controller->estVelocity = controller->estVelocityIntegral >> 5;
     controller->estVelocityIntegral -= (controller->estVelocity << 5);
 
-    // Estimate Position
+    // 估计位置（超前角补偿后）
     controller->estLeadPosition = Controller::CompensateAdvancedAngle(controller->estVelocity);
     controller->estPosition = controller->realPosition + controller->estLeadPosition;
 
-    // Estimate Error
+    // 估计误差
     controller->estError = controller->softPosition - controller->estPosition;
 
-    /************************************ Ctrl Loop ************************************/
+    /************************************ 控制环 ************************************/
     if (controller->isStalled ||
         controller->softDisable ||
         !encoder->IsCalibrated())
@@ -143,14 +153,14 @@ void Motor::CloseLoopControlTick()
         }
     }
 
-    /******************************* Mode Change Handle *******************************/
+    /******************************* 模式切换处理 *******************************/
     if (controller->modeRunning != controller->requestMode)
     {
         controller->modeRunning = controller->requestMode;
         controller->softNewCurve = true;
     }
 
-    /******************************* Update Hard-Goal *******************************/
+    /******************************* 更新硬目标 *******************************/
     if (controller->goalVelocity > config.motionParams.ratedVelocity)
         controller->goalVelocity = config.motionParams.ratedVelocity;
     else if (controller->goalVelocity < -config.motionParams.ratedVelocity)
@@ -160,7 +170,7 @@ void Motor::CloseLoopControlTick()
     else if (controller->goalCurrent < -config.motionParams.ratedCurrent)
         controller->goalCurrent = -config.motionParams.ratedCurrent;
 
-    /******************************** Motion Plan *********************************/
+    /******************************** 运动规划 *********************************/
     if ((controller->softDisable && !controller->goalDisable) ||
         (controller->softBrake && !controller->goalBrake))
     {
@@ -200,7 +210,7 @@ void Motor::CloseLoopControlTick()
                 break;
             case MODE_STEP_DIR:
                 motionPlanner.positionInterpolator.NewTask(controller->estPosition, controller->estVelocity);
-                // step/dir mode uses delta-position, so stay where we are
+                // STEP/DIR 模式使用增量位置
                 controller->goalPosition = controller->estPosition;
                 break;
             default:
@@ -208,7 +218,7 @@ void Motor::CloseLoopControlTick()
         }
     }
 
-    /******************************* Update Soft Goal *******************************/
+    /******************************* 更新软目标 *******************************/
     switch (controller->modeRunning)
     {
         case MODE_STOP:
@@ -256,10 +266,10 @@ void Motor::CloseLoopControlTick()
     controller->softDisable = controller->goalDisable;
     controller->softBrake = controller->goalBrake;
 
-    /******************************** State Check ********************************/
+    /******************************** 状态检查 ********************************/
     int32_t current = abs(controller->focCurrent);
 
-    // Stall detect
+    // 堆转检测
     if (controller->config->stallProtectSwitch)
     {
         if (// Current Mode
@@ -282,7 +292,7 @@ void Motor::CloseLoopControlTick()
         }
     }
 
-    // Overload detect
+    // 过载检测
     if ((controller->modeRunning != MODE_COMMAND_CURRENT) &&
         (controller->modeRunning != MODE_PWM_CURRENT) &&
         (current == config.motionParams.ratedCurrent))
@@ -297,7 +307,7 @@ void Motor::CloseLoopControlTick()
         controller->overloadFlag = false;
     }
 
-    /******************************** Update State ********************************/
+    /******************************** 更新状态 ********************************/
     if (!encoder->IsCalibrated())
         controller->state = STATE_NO_CALIB;
     else if (controller->modeRunning == MODE_STOP)
@@ -361,7 +371,7 @@ void Motor::Controller::CalcPidToOutput(int32_t _speed)
     config->pid.integralRemainder = config->pid.integralRound >> 10;
     config->pid.integralRound -= (config->pid.integralRemainder << 10);
     config->pid.outputKi += config->pid.integralRemainder;
-    // integralRound limitation is  ratedCurrent*1024
+    // integralRound 上限 = ratedCurrent * 1024（防积分饱和）
     if (config->pid.outputKi > context->config.motionParams.ratedCurrent << 10)
         config->pid.outputKi = context->config.motionParams.ratedCurrent << 10;
     else if (config->pid.outputKi < -(context->config.motionParams.ratedCurrent << 10))
@@ -394,7 +404,7 @@ void Motor::Controller::CalcDceToOutput(int32_t _location, int32_t _speed)
     config->dce.integralRemainder = config->dce.integralRound >> 7;
     config->dce.integralRound -= (config->dce.integralRemainder << 7);
     config->dce.outputKi += config->dce.integralRemainder;
-    // limited to ratedCurrent * 1024, should be TUNED when use different scene
+    // 限制为 ratedCurrent * 1024，在不同场景下应重新调优
     if (config->dce.outputKi > context->config.motionParams.ratedCurrent << 10)
         config->dce.outputKi = context->config.motionParams.ratedCurrent << 10;
     else if (config->dce.outputKi < -(context->config.motionParams.ratedCurrent << 10))
@@ -525,7 +535,7 @@ void Motor::Controller::ClearStallFlag()
 int32_t Motor::Controller::CompensateAdvancedAngle(int32_t _vel)
 {
     /*
-     * The code is for DPS series sensors, need to measured and renew for TLE5012/MT6816.
+     * 代码为 DPS 系列传感器调试而设，TLE5012 / MT6816 需重新测量并更新参数。
      */
 
     int32_t compensate;

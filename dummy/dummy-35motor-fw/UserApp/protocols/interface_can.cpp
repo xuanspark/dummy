@@ -1,3 +1,11 @@
+// ============================================================================
+//  interface_can.cpp —— 35 步进子板 CAN 命令处理
+// ----------------------------------------------------------------------------
+//  - 接收 ref 主控下发的使能、位置、速度、电流、PID/DCE 参数等命令
+//  - 将本地电机状态、角度、参数和在线心跳通过 CAN 回报给主控
+//  - 该协议与 42motor 结构镜像一致，仅默认电机参数不同
+// ============================================================================
+
 #include "common_inc.h"
 #include "configurations.h"
 #include <can.h>
@@ -238,6 +246,43 @@ void OnCanCmd(uint8_t _cmd, uint8_t* _data, uint32_t _len)
             _data[6] = 0;
             _data[7] = 0;
             txHeader.StdId = (boardConfig.canNodeId << 7) | 0x25;
+            CAN_Send(&txHeader, _data);
+        }
+            break;
+
+        case 0x27: // Get DCE Kp
+        {
+            auto* b = (unsigned char*) &boardConfig.dce_kp;
+            for (int i = 0; i < 4; i++)
+                _data[i] = *(b + i);
+            txHeader.StdId = (boardConfig.canNodeId << 7) | 0x27;
+            CAN_Send(&txHeader, _data);
+        }
+            break;
+        case 0x28: // Get DCE Kv
+        {
+            auto* b = (unsigned char*) &boardConfig.dce_kv;
+            for (int i = 0; i < 4; i++)
+                _data[i] = *(b + i);
+            txHeader.StdId = (boardConfig.canNodeId << 7) | 0x28;
+            CAN_Send(&txHeader, _data);
+        }
+            break;
+        case 0x29: // Get DCE Ki
+        {
+            auto* b = (unsigned char*) &boardConfig.dce_ki;
+            for (int i = 0; i < 4; i++)
+                _data[i] = *(b + i);
+            txHeader.StdId = (boardConfig.canNodeId << 7) | 0x29;
+            CAN_Send(&txHeader, _data);
+        }
+            break;
+        case 0x2A: // Get DCE Kd
+        {
+            auto* b = (unsigned char*) &boardConfig.dce_kd;
+            for (int i = 0; i < 4; i++)
+                _data[i] = *(b + i);
+            txHeader.StdId = (boardConfig.canNodeId << 7) | 0x2A;
             CAN_Send(&txHeader, _data);
         }
             break;

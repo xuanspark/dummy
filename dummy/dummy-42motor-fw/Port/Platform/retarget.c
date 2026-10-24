@@ -1,3 +1,9 @@
+// ============================================================================
+//  retarget.c —— newlib 系统调用重定向
+// ----------------------------------------------------------------------------
+//  - 重写 _read / _write / _isatty 等 C 库底层桩函数，让 printf 输出走 UART
+//  - 默认调试输出指向 USART1（与 main.cpp 的串口配置一致）
+// ============================================================================
 #include <errno.h>
 #include <sys/time.h>
 #include <Platform/retarget.h>
@@ -15,8 +21,8 @@ void RetargetInit(UART_HandleTypeDef *huart)
 {
     gHuart = huart;
 
-    /* Disable I/O buffering for STDOUT stream, so that
-     * chars are sent out as soon as they are printed. */
+    /* 禁用 STDOUT 的 I/O 缓冲，让字符在被 printf 后立即发出， */
+    /* 避免由于缓冲造成调试输出延迟。 */
     setvbuf(stdout, NULL, _IONBF, 0);
 }
 
@@ -33,7 +39,7 @@ int _write(int fd, char *ptr, int len)
 {
     if (fd == STDOUT_FILENO || fd == STDERR_FILENO)
     {
-        // ToDo: Change this to DMA version
+        // TODO: 改为 DMA 发送以减少 CPU 占用
         HAL_UART_Transmit(gHuart, (uint8_t *) ptr, len, HAL_MAX_DELAY);
         return len;
     } else

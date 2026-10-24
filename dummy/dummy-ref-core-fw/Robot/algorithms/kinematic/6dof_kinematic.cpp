@@ -1,5 +1,15 @@
+// ============================================================================
+//  6dof_kinematic.cpp —— DOF6Kinematic 求解器实现
+// ----------------------------------------------------------------------------
+//  - 使用 ARM CMSIS-DSP 的 arm_matrix 矩阵库做姿态/旋转矩阵运算
+//  - SolveFK：齐次变换矩阵连乘 + 末端姿态分解为 ZYX 欧拉角
+//  - SolveIK：解析法 + 8 组解枚举（球腕假设）；调用方挑距当前最近的一组
+//  - 数学细节较为密集，函数级注释保持轻量；详见上层 dummy_robot.cpp 调用
+// ============================================================================
 #include "6dof_kinematic.h"
 
+// 覆盖 cmath 的 cosf/sinf，走 ARM CMSIS-DSP 的查表版本（0.5~3 us）
+// 提供足够的精度～1e-5 且带硬件加速，比 newlib 版本快 5~10 倍。
 inline float cosf(float x)
 {
     return arm_cos_f32(x);
@@ -10,6 +20,8 @@ inline float sinf(float x)
     return arm_sin_f32(x);
 }
 
+// MatMultiply: 三循环矩阵乘法 (m×l) × (l×n) → (m×n)。
+// 本项目中只调 3×3 与 3×1 乘法、未使用 arm_mat_mult_f32 以节省初始化开销。
 static void MatMultiply(const float* _matrix1, const float* _matrix2, float* _matrixOut,
                         const int _m, const int _l, const int _n)
 {
@@ -29,10 +41,14 @@ static void MatMultiply(const float* _matrix1, const float* _matrix2, float* _ma
     }
 }
 
+// RotMatToEulerAngle: 3×3 旋转矩阵 → ZYX 欧拉角 (C, B, A)。
+// 采用常规提取公式：B = -asin(R[6])，A = atan2(R[3]/cosB, R[0]/cosB)，
+// C = atan2(R[7]/cosB, R[8]/cosB)。当 |R[6]| 接近 1 时发生万向锁锁，需特殊处理。
 static void RotMatToEulerAngle(const float* _rotationM, float* _eulerAngles)
 {
     float A, B, C, cb;
 
+    // 万向锁锁检测：|R[6]| 接近 1 时 cosB 接近 0，使上面公式不稳定
     if (fabs(_rotationM[6]) >= 1.0 - 0.0001)
     {
         if (_rotationM[6] < 0)
@@ -59,6 +75,8 @@ static void RotMatToEulerAngle(const float* _rotationM, float* _eulerAngles)
     _eulerAngles[2] = A;
 }
 
+// EulerAngleToRotMat: ZYX 欧拉角 (C, B, A) → 3×3 旋转矩阵。
+// 与 RotMatToEulerAngle 互为逆运算，填 R[0..8] 作为后续 FK / IK 使用。
 static void EulerAngleToRotMat(const float* _eulerAngles, float* _rotationM)
 {
     float ca, cb, cc, sa, sb, sc;
@@ -82,9 +100,13 @@ static void EulerAngleToRotMat(const float* _eulerAngles, float* _rotationM)
 }
 
 
+// 构造函数：填 DH 参数表 + 预计算关节间偏移与距离。
+// DH 表每行 [home, d, a, alpha]，home 为初始角补、d 为连杆粉 z 偏移、
+// a 为连杆 x 偏移、alpha 为连杆 x 轴旋转。
 DOF6Kinematic::DOF6Kinematic(float L_BS, float D_BS, float L_AM, float L_FA, float D_EW, float L_WT)
     : armConfig(ArmConfig_t{L_BS, D_BS, L_AM, L_FA, D_EW, L_WT})
 {
+    // ----- DH 参数表（6 关节）。与机械装配紧密相关。 -----
     float tmp_DH_matrix[6][4] = {
         {0.0f,            armConfig.L_BASE,    armConfig.D_BASE, -(float) M_PI_2},
         {-(float) M_PI_2, 0.0f,                armConfig.L_ARM,  0.0f},
@@ -111,11 +133,18 @@ DOF6Kinematic::DOF6Kinematic(float L_BS, float D_BS, float L_AM, float L_FA, flo
     atan_e = 0;
 }
 
+// SolveFK：正运动学。步骤：
+//   1. 将入参关节角 deg 转 rad
+//   2. 逐轴按 DH 参数构造 3×3 旋转矩阵 R[i] （提供 cos/sin 预算优化）
+//   3. 连乘 R[0..5] 得 R02/R03/R04/R05/R06
+//   4. 逐联贵乘以连杆偏移向量得到每段末端在基座的位置
+//   5. 累加得 P06（末端位置）
+//   6. 从 R06 提取 ZYX 欧拉角并转 deg
 bool
 DOF6Kinematic::SolveFK(const DOF6Kinematic::Joint6D_t &_inputJoint6D, DOF6Kinematic::Pose6D_t &_outputPose6D)
 {
-    float q_in[6];
-    float q[6];
+    float q_in[6];      // 入参关节角转 rad 后的拷贝
+    float q[6];         // q_in 加上 DH 中 home 偏移后的实际计算角
     float cosq, sinq;
     float cosa, sina;
     float P06[6];
@@ -130,9 +159,11 @@ DOF6Kinematic::SolveFK(const DOF6Kinematic::Joint6D_t &_inputJoint6D, DOF6Kinema
     float L0_ew[3];
     float L0_wt[3];
 
+    // 1) deg → rad
     for (int i = 0; i < 6; i++)
         q_in[i] = _inputJoint6D.a[i] / RAD_TO_DEG;
 
+    // 2) 逐轴构造 R[i] 旋转矩阵。公式为 Rotz(q+home) * Rotx(alpha)。
     for (int i = 0; i < 6; i++)
     {
         q[i] = q_in[i] + DH_matrix[i][0];
@@ -152,20 +183,24 @@ DOF6Kinematic::SolveFK(const DOF6Kinematic::Joint6D_t &_inputJoint6D, DOF6Kinema
         R[i][8] = cosa;
     }
 
+    // 3) 逐乘得 R02..R06，表示基座 → 各中间坐标系的旋转矩阵
     MatMultiply(R[0], R[1], R02, 3, 3, 3);
     MatMultiply(R02, R[2], R03, 3, 3, 3);
     MatMultiply(R03, R[3], R04, 3, 3, 3);
     MatMultiply(R04, R[4], R05, 3, 3, 3);
     MatMultiply(R05, R[5], R06, 3, 3, 3);
 
+    // 4) 各连杆偏移从本身坐标系变到基座坐标系中
     MatMultiply(R[0], L1_base, L0_bs, 3, 3, 1);
     MatMultiply(R02, L2_arm, L0_se, 3, 3, 1);
     MatMultiply(R03, L3_elbow, L0_ew, 3, 3, 1);
     MatMultiply(R06, L6_wrist, L0_wt, 3, 3, 1);
 
+    // 5) 累加为末端位置 P06
     for (int i = 0; i < 3; i++)
         P06[i] = L0_bs[i] + L0_se[i] + L0_ew[i] + L0_wt[i];
 
+    // 6) R06 → ZYX 欧拉角，填在 P06[3..5] 中
     RotMatToEulerAngle(R06, &(P06[3]));
 
     _outputPose6D.X = P06[0];
@@ -179,12 +214,19 @@ DOF6Kinematic::SolveFK(const DOF6Kinematic::Joint6D_t &_inputJoint6D, DOF6Kinema
     return true;
 }
 
+// SolveIK：逆运动学。项记为“球腕”拆解：
+//   - 先求手腕中心 Pw = P06 - L0_wt（末端减去手腕偏移）
+//   - 由 Pw 变为基座坐标后，准备逐轴推 q1、q2、q3 (同面三关节)
+//   - q1：上远仔、下远仔 两种选择 → 2 组
+//   - q2：骨肢伸、骨肢屈 两种选择 → ×2 = 4 组
+//   - q4..q6：手腕上、下反转 两种选择 → ×2 = 8 组
+//  调用方从 8 组中选距_lastJoint6D 最近的一组作为实际运动目标。
 bool DOF6Kinematic::SolveIK(const DOF6Kinematic::Pose6D_t &_inputPose6D, const Joint6D_t &_lastJoint6D,
                             DOF6Kinematic::IKSolves_t &_outputSolves)
 {
-    float qs[2];
-    float qa[2][2];
-    float qw[2][3];
+    float qs[2];        // q1的两种解（肩部是否反使）
+    float qa[2][2];     // q2/q3：骨肢朝上/下 × 肩两双发散总 2×2 组合
+    float qw[2][3];     // q4/q5/q6：手腕上/下反转 × 3 个轴
     float cosqs, sinqs;
     float cosqa[2], sinqa[2];
     float cosqw, sinqw;

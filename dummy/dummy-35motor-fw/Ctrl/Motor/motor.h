@@ -1,3 +1,11 @@
+// ============================================================================
+//  motor.h —— 顶层电机对象（35 步进版本）
+// ----------------------------------------------------------------------------
+//  - 与 42motor 项目几乎完全镜像，仅默认参数（dce_kp 等）针对小型 35 mm 步进调优
+//  - 聚合驱动 (DriverBase) 、编码器 (EncoderBase) 、运动规划器 (MotionPlanner) 与控制器 (Controller)
+//  - Tick20kHz 是控制环主体，由 main.cpp 的 htim4 中断调用
+//  - 位置单位：子步计数（1 圈 = MOTOR_ONE_CIRCLE_SUBDIVIDE_STEPS = 200 × 256 = 51200）
+// ============================================================================
 #ifndef CTRL_STEP_FW_MOTOR_H
 #define CTRL_STEP_FW_MOTOR_H
 
@@ -11,7 +19,7 @@ public:
     Motor() :
         controller(&controllerInstance)
     {
-        /****************** Default Configs *******************/
+        /****************** 默认配置（会被 main.cpp 中从 EEPROM 读取的配置覆盖） *******************/
         config.motionParams.encoderHomeOffset = 0;
         config.motionParams.caliCurrent = 2000;             // (mA)
         config.motionParams.ratedCurrent = 1000;            // (mA)

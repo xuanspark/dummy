@@ -1,0 +1,94 @@
+:root {
+  color-scheme: dark;
+  --bg: #0f172a;
+  --bg-2: #1e293b;
+  --fg: #e2e8f0;
+  --fg-dim: #94a3b8;
+  --accent: #3b82f6;
+  --ok: #22c55e;
+  --err: #ef4444;
+}
+
+html, body, #app {
+  height: 100%;
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+.app-layout {
+  display: grid;
+  grid-template-rows: auto auto 1fr;   /* header | tab-bar | main */
+  height: 100vh;
+  overflow: hidden;
+}
+
+.app-header {
+  background: var(--bg-2);
+  padding: 0.6em 1em;
+  border-bottom: 1px solid #334155;
+  display: flex;
+  align-items: center;
+  gap: 1em;
+}
+
+.app-header h1 {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 600;
+}
+
+.app-main {
+  padding: 1em;
+  overflow: hidden;          /* no page scrolling; only inner log-box scrolls */
+  display: flex;
+  flex-direction: column;
+  gap: 1em;
+  min-height: 0;             /* allow children to shrink below their content size */
+}
+
+.app-main > .card,
+.app-main > .top-row,
+.app-main > .mid-row {
+  flex: 0 0 auto;
+}
+
+/* The Console card stretches to fill leftover vertical space. */
+.app-main > .card:last-child {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.card {
+  background: var(--bg-2);
+  border: 1px solid #334155;
+  border-radius: 8px;
+  padding: 1em;
+}
+
+.card h2 {
+  margin: 0 0 0.6em;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.log-box {
+  background: #020617;
+  border-radius: 4px;
+  padding: 0.5em;
+  flex: 1 1 auto;            /* fill remaining space inside the Console card */
+  min-height: 0;
+  overflow-y: auto;
+  font-family: Consolas, 'Courier New', monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.log-line { color: var(--fg-dim); }
+.log-line.tx { color: #93c5fd; }
+.log-line.ok { color: var(--ok); }
+.log-line.err { color: var(--err); }

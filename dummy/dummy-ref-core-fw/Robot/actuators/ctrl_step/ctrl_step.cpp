@@ -1,3 +1,11 @@
+// ============================================================================
+//  ctrl_step.cpp —— CAN 步进电机节点封装实现
+// ----------------------------------------------------------------------------
+//  - 将关节角度、速度、电流、DCE 参数等高级操作编码为 CAN 命令
+//  - 维护节点在线状态、实时反馈角度和运动完成标志
+//  - 作为 ref 主控与 35/42 电机子板之间的唯一执行器抽象
+// ============================================================================
+
 #include "ctrl_step.hpp"
 #include "communication.hpp"
 
@@ -269,13 +277,19 @@ void CtrlStepMotor::UpdateAngle()
     uint8_t mode = 0x23;
     txHeader.StdId = nodeID << 7 | mode;
 
+    // 清空 canBuf，避免前序命令（如 SetPositionWithVelocityLimit）写入的字节
+    // 透传到子板。35hand 固件用 _data[5]/[6] 携带 isStalled/state，必须保证查询帧
+    // 这些位置发出时为 0。
+    for (int i = 0; i < 8; i++) canBuf[i] = 0;
+
     CanSendMessage(get_can_ctx(hcan), canBuf, &txHeader);
 }
 
 
-void CtrlStepMotor::UpdateAngleCallback(float _pos, bool _isFinished)
+void CtrlStepMotor::UpdateAngleCallback(float _pos, bool _isFinished, bool _isStalled)
 {
     state = _isFinished ? FINISH : RUNNING;
+    isStalled = _isStalled;
 
     float tmp = _pos / (float) reduction * 360;
     angle = inverseDirection ? -tmp : tmp;
@@ -335,4 +349,73 @@ void CtrlStepMotor::SetDceKd(int32_t _val)
     canBuf[4] = 1; // Need save to EEPROM or not
 
     CanSendMessage(get_can_ctx(hcan), canBuf, &txHeader);
+}
+
+
+// ==================== DCE 参数实时查询 ====================
+
+void CtrlStepMotor::QueryDceKp()
+{
+    txHeader.StdId = nodeID << 7 | 0x27;
+    CanSendMessage(get_can_ctx(hcan), canBuf, &txHeader);
+}
+
+void CtrlStepMotor::QueryDceKv()
+{
+    txHeader.StdId = nodeID << 7 | 0x28;
+    CanSendMessage(get_can_ctx(hcan), canBuf, &txHeader);
+}
+
+void CtrlStepMotor::QueryDceKi()
+{
+    txHeader.StdId = nodeID << 7 | 0x29;
+    CanSendMessage(get_can_ctx(hcan), canBuf, &txHeader);
+}
+
+void CtrlStepMotor::QueryDceKd()
+{
+    txHeader.StdId = nodeID << 7 | 0x2A;
+    CanSendMessage(get_can_ctx(hcan), canBuf, &txHeader);
+}
+
+void CtrlStepMotor::QueryDceAll()
+{
+    dceQueryDone = false;
+    QueryDceKp();
+    QueryDceKv();
+    QueryDceKi();
+    QueryDceKd();
+}
+
+void CtrlStepMotor::DceParamCallback(uint8_t paramId, int32_t value)
+{
+    switch (paramId)
+    {
+        case 0x27: dceKp = value; break;
+        case 0x28: dceKv = value; break;
+        case 0x29: dceKi = value; break;
+        case 0x2A: dceKd = value; break;
+        default: break;
+    }
+    dceQueryDone = true;
+    // 同时标记在线
+    isOnline = true;
+    lastResponseTick = HAL_GetTick();
+}
+
+
+// ==================== 在线检测 ====================
+
+void CtrlStepMotor::QueryOnline()
+{
+    // 复用 0x23 位置查询作为探测帧，电机端一定会响应
+    isOnline = false;
+    txHeader.StdId = nodeID << 7 | 0x23;
+    CanSendMessage(get_can_ctx(hcan), canBuf, &txHeader);
+}
+
+void CtrlStepMotor::OnlineCallback()
+{
+    isOnline = true;
+    lastResponseTick = HAL_GetTick();
 }

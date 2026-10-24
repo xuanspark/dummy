@@ -15,8 +15,7 @@ void RetargetInit(UART_HandleTypeDef *huart)
 {
     gHuart = huart;
 
-    /* Disable I/O buffering for STDOUT stream, so that
-     * chars are sent out as soon as they are printed. */
+    /* 关掉 STDOUT 的 I/O 缓冲，使 printf 的字符打印后立即发出。 */
     setvbuf(stdout, NULL, _IONBF, 0);
 }
 
@@ -33,7 +32,7 @@ int _write(int fd, char *ptr, int len)
 {
     if (fd == STDOUT_FILENO || fd == STDERR_FILENO)
     {
-        // ToDo: Change this to DMA version
+        // TODO: 改为 DMA 版本以降低 CPU 占用
         HAL_UART_Transmit(gHuart, (uint8_t *) ptr, len, HAL_MAX_DELAY);
         return len;
     } else

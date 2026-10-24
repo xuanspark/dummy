@@ -1,7 +1,15 @@
+// ============================================================================
+//  timer.cpp —— Timer 类实现：注册回调到 timerCallbacks[] 静态表，
+//  在 HAL_TIM_PeriodElapsedCallback 中按 TIM 实例查表分发。
+// ============================================================================
 #include "timer.hpp"
 
+// 5 个回调槽位，索引与 TIM 实例一一对应：
+//   [0]=TIM7  [1]=TIM10  [2]=TIM11  [3]=TIM13  [4]=TIM14
 static TimerCallback_t timerCallbacks[5];
 
+// 构造函数：验证 TIM 实例、限付频率、计算 PSC/ARR、构释 HAL TIM 基底。
+// _freqHz 限付范围 [1, 10 MHz]。验证不过调 Error_Handler 陶坏。
 Timer::Timer(TIM_HandleTypeDef *_htim, uint32_t _freqHz)
 {
     htim7.Instance = TIM7;
@@ -39,11 +47,16 @@ Timer::Timer(TIM_HandleTypeDef *_htim, uint32_t _freqHz)
     }
 }
 
+// Start: 启动 TIM + IT，开始周期性产生中断。
+// 调用前需 SetCallback，否则中断里会调空函数指针造成坏。
 void Timer::Start()
 {
     HAL_TIM_Base_Start_IT(htim);
 }
 
+// CalcRegister: 根据需要频率反推 PSC 与 ARR。思路：
+//   1. PSC 从 1 开始不断×2 探路，直到 ARR < 65536。
+//   2. APB1 (TIM7/13/14) 计数频率 = 84 MHz；APB2 (TIM10/11) = 168 MHz。
 void Timer::CalcRegister(uint32_t _freq)
 {
     float psc = 0.5;
@@ -67,6 +80,7 @@ void Timer::CalcRegister(uint32_t _freq)
 }
 
 
+// SetCallback: 根据 htim->Instance 填入静态表。OnTimerCallback 会查表分发。
 void Timer::SetCallback(TimerCallback_t _timerCallback)
 {
     if (htim->Instance == TIM7)
@@ -88,6 +102,8 @@ void Timer::SetCallback(TimerCallback_t _timerCallback)
 }
 
 
+// HAL_TIM_PeriodElapsedCallback 中会调本函数。根据 TIM 实例查静态表分发到
+// 用户设定的回调函数。运行在中断上下文，调用方需避免在里面调耗时 API。
 extern "C"
 void OnTimerCallback(TIM_TypeDef *timInstance)
 {

@@ -7,9 +7,9 @@ class MT6816 : public MT6816Base
 {
 public:
     /*
-     * _quickCaliDataPtr is the start address where calibration data stored,
-     * in STM32F103CBT6 flash size is 128K (0x08000000 ~ 0x08020000), we use
-     * last 33K (32K clib + 1K user) for storage, and it starts from 0x08017C00.
+     * _quickCaliDataPtr 是校准数据在 Flash 中的起始地址。
+     * STM32F103CBT6 Flash 大小为 128 KB (0x08000000 ~ 0x08020000)，
+     * 末尾 33 KB（32 KB 校准表 + 1 KB 用户区）用于存储，起始地址 0x08017C00。
      */
     explicit MT6816() : MT6816Base((uint16_t*) (0x08017C00))
     {}
