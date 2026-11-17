@@ -55,7 +55,7 @@
 uint64_t serialNumber;
 uint64_t myserial = 8;
 char serialNumberStr[13];
-uint8_t ucHeap[configTOTAL_HEAP_SIZE];
+__attribute__((aligned(8))) uint8_t ucHeap[configTOTAL_HEAP_SIZE];
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
