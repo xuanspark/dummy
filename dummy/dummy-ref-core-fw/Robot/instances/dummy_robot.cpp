@@ -311,6 +311,8 @@ bool DummyRobot::RunPose(const DOF6Kinematic::Joint6D_t& pose, float speed)
         if (robotState == STATE_EMERGENCY_STOP || seenStop != stopEpoch) {
             while (robotState != STATE_NORMAL) osDelay(5);
             seenStop = stopEpoch;
+            // 急停期间不计入动作超时；恢复后从零开始统计本次实际执行时间。
+            activeTime = 0;
             SetJointSpeed(speed);
             if (!MoveJ(pose.a[0], pose.a[1], pose.a[2], pose.a[3], pose.a[4], pose.a[5])) break;
             for (int n = 1; n <= 6; ++n) sequences[n - 1] = motorJ[n]->angleSequence;
@@ -358,6 +360,8 @@ bool DummyRobot::RunHand(const char* command)
         if (robotState == STATE_EMERGENCY_STOP || seenStop != stopEpoch) {
             while (robotState != STATE_NORMAL) osDelay(5);
             seenStop = stopEpoch;
+            // 急停期间不计入动作超时；恢复后从零开始统计本次实际执行时间。
+            activeTime = 0;
             sequence = hand2->angleSequence;
             send = true;
         }

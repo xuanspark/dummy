@@ -281,6 +281,7 @@ int main()
                 "stop_resumes_actual_user_target");
 
         Reset();
+        currentFinishedWithoutContact = false;
         Send("!HD_O");
         bool stoppedHand = false;
         delayHook = [&] {
@@ -298,6 +299,25 @@ int main()
         RunOne();
         Require(dummy.IsEnabled() && dummy.hand2->isEnabled() && disableCount == before &&
                 usb.text.find("HD_ZERO OK MIN:") != std::string::npos, "hand_calibration_keeps_enabled");
+
+        Reset();
+        currentFinishedWithoutContact = true;
+        Send("!HD_O");
+        const uint32_t handResumeBaseline = tick;
+        bool handStoppedNearTimeout = false;
+        delayHook = [&] {
+            if (!handStoppedNearTimeout && tick - handResumeBaseline >= 9800) {
+                handStoppedNearTimeout = true;
+                Send("!STOP");
+                currentFinishedWithoutContact = false;
+                Send("!RESUME");
+            }
+        };
+        RunOne();
+        delayHook = {};
+        Require(handStoppedNearTimeout && dummy.robotState == DummyRobot::STATE_NORMAL &&
+                usb.text.find("HD_O OK") != std::string::npos,
+                "hand_resume_resets_timeout");
 
         Reset();
         Send("!CALIBRATION"); RunOne();

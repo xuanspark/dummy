@@ -414,8 +414,10 @@ void Receive(const char* input, size_t length, StreamSink& baseOutput)
         Respond(output, "Stop OK STATE:%s", dummy.StateName()); return;
     }
     if (!strcmp(command, "!PAUSE")) {
-        dummy.commandHandler.Pause();
-        Respond(output, "Pause OK STATE:%s", dummy.StateName()); return;
+        bool accepted = dummy.commandHandler.Pause();
+        if (accepted) Respond(output, "Pause OK STATE:%s", dummy.StateName());
+        else Respond(output, "Pause Error: state=%s", dummy.StateName());
+        return;
     }
     if (!strcmp(command, "!RESUME")) {
         const char* previous = dummy.StateName();
