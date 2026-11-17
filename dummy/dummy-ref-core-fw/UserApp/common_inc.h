@@ -8,7 +8,7 @@
 #define REF_STM32F4_COMMON_INC_H
 
 #define CONFIG_FW_VERSION 1.1    // 固件版本号，供启动横幅 / Fibre 查询
-#define CONFIG_FW_VERSION_TEXT "1.1.0"
+#define CONFIG_FW_VERSION_TEXT "1.1.1"
 
 /*---------------------------- C 作用域 ---------------------------*/
 // 以下头与声明在 C 与 C++ 中都可见，供 CubeMX 生成的 freertos.c 等调用
@@ -37,6 +37,7 @@ extern char serialNumberStr[13];     // 十二位十六进制字符串表示，�
 }
 
 /*---------------------------- C++ 作用域 ---------------------------*/
+#include "runtime_failure.hpp"
 // 仅 C++ 部分可见。下面这些头几乎是机器人主体业务的全部拼凑：
 //   - 通信层 / EEPROM
 //   - OLED (U8g2) 与 IMU (MPU6050) 驱动

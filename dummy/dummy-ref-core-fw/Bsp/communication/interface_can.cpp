@@ -68,6 +68,8 @@ bool StartCanServer(CAN_TypeDef* hcan)
     ctxs->serial_number = serialNumber;
     osSemaphoreDef(sem_send_heartbeat);
     ctxs->sem_send_heartbeat = osSemaphoreNew(1, 0, osSemaphore(sem_send_heartbeat));
+    if (!ctxs->sem_send_heartbeat)
+        return false;
 
     //// 设置接收过滤器（全接受）
     CAN_FilterTypeDef sFilterConfig = {

@@ -22,6 +22,8 @@ RGB rgb(0);
 // Robot instance
 DummyRobot dummy(&hcan1);
 
+static volatile bool imuReady = false;
+
 
 /* Thread Definitions -----------------------------------------------------*/
 osThreadId_t controlLoopFixUpdateHandle;
@@ -89,12 +91,13 @@ void ThreadOledUpdate(void* argument)
 
     for (;;)
     {
-        mpu6050.Update(true);
+        if (imuReady)
+            mpu6050.Update(true);
 
         oled.clearBuffer();
         oled.setFont(u8g2_font_5x8_tr);
         oled.setCursor(0, 10);
-        oled.printf("IMU:%.3f/%.3f", mpu6050.data.ax, mpu6050.data.ay);
+        oled.printf(imuReady ? "IMU:%.3f/%.3f" : "IMU:OFF", mpu6050.data.ax, mpu6050.data.ay);
         oled.setCursor(85, 10);
         const uint32_t now = micros();
         const uint32_t elapsed = now - t;
@@ -138,6 +141,7 @@ void ThreadOledUpdate(void* argument)
         }
 
         oled.sendBuffer();
+        osDelay(50);
     }
 }
 
@@ -153,7 +157,30 @@ void OnTimer7Callback()
 }
 
 osThreadId_t rgbTaskHandle;
+static UBaseType_t StackWatermark(osThreadId_t handle)
+{
+    return handle ? uxTaskGetStackHighWaterMark((TaskHandle_t) handle) : 0;
+}
+
+static void ReportRuntimeHealth()
+{
+    if (!uart4StreamOutputPtr) return;
+    Respond(*uart4StreamOutputPtr,
+            "[sys] heap=%lu min_heap=%lu stack_words{comm=%lu usb=%lu uart=%lu "
+            "ctrl=%lu cmd=%lu oled=%lu rgb=%lu}\n",
+            (unsigned long) xPortGetFreeHeapSize(),
+            (unsigned long) xPortGetMinimumEverFreeHeapSize(),
+            (unsigned long) StackWatermark(commTaskHandle),
+            (unsigned long) StackWatermark(usbServerTaskHandle),
+            (unsigned long) StackWatermark(uartServerTaskHandle),
+            (unsigned long) StackWatermark(controlLoopFixUpdateHandle),
+            (unsigned long) StackWatermark(ControlLoopUpdateHandle),
+            (unsigned long) StackWatermark(oledTaskHandle),
+            (unsigned long) StackWatermark(rgbTaskHandle));
+}
+
 void ThreadRGBUpdate(void* argument) {
+    uint32_t healthReportElapsedMs = 0;
     for (;;) {
         if (dummy.GetRGBEnabled())
         {
@@ -166,6 +193,12 @@ void ThreadRGBUpdate(void* argument) {
         dummy.AutoModeIdleTick(30);
         // 在线检测定时 tick（5 分钟，工作时不检测）
         dummy.OnlineCheckTick(30);
+        healthReportElapsedMs += 30;
+        if (healthReportElapsedMs >= 5000)
+        {
+            healthReportElapsedMs = 0;
+            ReportRuntimeHealth();
+        }
         osDelay(30);
     }
 }
@@ -193,13 +226,19 @@ void Main(void)
     dummy.InitSysCmdThread();
     InitAsciiCommands();
 
-    // Init IMU.
-    do
+    // Init IMU with a bounded retry count so a missing sensor cannot block OLED startup.
+    for (uint32_t attempt = 0; attempt < 5; ++attempt)
     {
         mpu6050.Init();
+        if (mpu6050.testConnection())
+        {
+            imuReady = true;
+            break;
+        }
         osDelay(100);
-    } while (!mpu6050.testConnection());
-    mpu6050.InitFilter(200, 100, 50);
+    }
+    if (imuReady)
+        mpu6050.InitFilter(200, 100, 50);
 
     // Init OLED 128x80.
     oled.Init();
@@ -213,6 +252,7 @@ void Main(void)
     };
     controlLoopFixUpdateHandle = osThreadNew(ThreadControlLoopFixUpdate, nullptr,
                                              &controlLoopTask_attributes);
+    if (!controlLoopFixUpdateHandle) HandleRuntimeInitFailure();
 
     const osThreadAttr_t ControlLoopUpdateTask_attributes = {
         .name = "ControlLoopUpdateTask",
@@ -221,6 +261,7 @@ void Main(void)
     };
     ControlLoopUpdateHandle = osThreadNew(ThreadControlLoopUpdate, nullptr,
                                           &ControlLoopUpdateTask_attributes);
+    if (!ControlLoopUpdateHandle) HandleRuntimeInitFailure();
 
     const osThreadAttr_t oledTask_attributes = {
         .name = "OledTask",
@@ -228,6 +269,7 @@ void Main(void)
         .priority = (osPriority_t) osPriorityNormal,   // should >= Normal
     };
     oledTaskHandle = osThreadNew(ThreadOledUpdate, nullptr, &oledTask_attributes);
+    if (!oledTaskHandle) HandleRuntimeInitFailure();
 
     const osThreadAttr_t rgbTask_attributes = {
             .name = "RGBTask",
@@ -235,13 +277,16 @@ void Main(void)
             .priority = (osPriority_t) osPriorityNormal,   // should >= Normal
     };
     rgbTaskHandle = osThreadNew(ThreadRGBUpdate, nullptr, &rgbTask_attributes);
+    if (!rgbTaskHandle) HandleRuntimeInitFailure();
 
     // Start Timer Callbacks.
     timerCtrlLoop.SetCallback(OnTimer7Callback);
     timerCtrlLoop.Start();
 
     // System started, light switch-led up.
-    Respond(*uart4StreamOutputPtr, "[sys] Heap remain: %d Bytes\n", xPortGetMinimumEverFreeHeapSize());
+    if (!imuReady)
+        Respond(*uart4StreamOutputPtr, "[sys] IMU unavailable; OLED continues without IMU data\n");
+    ReportRuntimeHealth();
     pwm.SetDuty(PWM::CH_A1, 0.5);
 }
 

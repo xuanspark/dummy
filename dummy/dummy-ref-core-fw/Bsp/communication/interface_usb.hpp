@@ -39,7 +39,11 @@ extern USBStats_t usb_stats_;
 void usb_rx_process_packet(uint8_t *buf, uint32_t len, uint8_t endpoint_pair);
 
 // 启动 USB 服务：绑定 StreamSink、起 USB 处理线程。由 communication.cpp 调。
+#ifdef __cplusplus
+bool StartUsbServer(void);
+#else
 void StartUsbServer(void);
+#endif
 
 #ifdef __cplusplus
 }

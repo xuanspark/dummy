@@ -12,7 +12,6 @@ extern "C" {
 #endif
 
 // ----- 信号量清单（由 freertos.c 定义、上层访问） -----
-extern osSemaphoreId sem_usb_irq;       // USB OTG_FS_IRQHandler 重载到中转线程的唤醒信号
 extern osSemaphoreId sem_uart4_dma;     // UART4 TxCplt 后释放，让下一次 process_bytes 能发送
 extern osSemaphoreId sem_uart5_dma;     // UART5 同上
 extern osSemaphoreId sem_usb_rx;        // USB CDC RX 包准备就绪的信号
@@ -24,13 +23,14 @@ extern osSemaphoreId sem_can2_tx;       // CAN2 同上
 /*--------------------------------- 系统线程 -------------------------------------*/
 extern osThreadId_t defaultTaskHandle;      // CubeMX 默认任务、辊跳到本项目的 Main()。Usage: 2000 Bytes stack
 extern osThreadId_t commTaskHandle;         // 启动三个服务器 + fibre publish。Usage: 48000 Bytes stack
-extern osThreadId_t usbIrqTaskHandle;       // USB 中断中转线程。Usage: 512  Bytes stack
 extern osThreadId_t usbServerTaskHandle;    // USB CDC 定期处理。Usage: 2048 Bytes stack
 extern osThreadId_t uartServerTaskHandle;   // UART 轮询线程。Usage: 2048 Bytes stack
 
 /*---------------------------------- 用户线程 --------------------------------------*/
 extern osThreadId_t oledTaskHandle;              // OLED 刷帧 + IMU 采样。Usage: 4000 Bytes stack
 extern osThreadId_t controlLoopFixUpdateHandle;  // 控制环主体（200 µs tick）。Usage: 4000 Bytes stack
+extern osThreadId_t ControlLoopUpdateHandle;     // 命令执行线程
+extern osThreadId_t rgbTaskHandle;               // RGB 刷新线程
 
 /*---------------- FreeRTOS 动态堆位于主 RAM，总容量 88 KB ------------------*/
 

@@ -216,8 +216,9 @@ const osThreadAttr_t usbServerTask_attributes = {
     .priority = (osPriority_t) osPriorityNormal,
 };
 
-void StartUsbServer()
+bool StartUsbServer()
 {
     // 启动 USB 服务线程
     usbServerTaskHandle = osThreadNew(UsbServerTask, nullptr, &usbServerTask_attributes);
+    return usbServerTaskHandle != nullptr;
 }

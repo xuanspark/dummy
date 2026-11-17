@@ -28,7 +28,11 @@ extern osThreadId uart_thread;             // UART RX 服务线程句柄（在 .
 
 // 启动 UART 服务：开 DMA 双缓冲循环 RX、注册流对象、起 1 ms 轮询线程。
 // 由 communication.cpp 的 CommunicationTask 在 publish 完毕后调用。
+#ifdef __cplusplus
+bool StartUartServer(void);
+#else
 void StartUartServer(void);
+#endif
 
 #ifdef __cplusplus
 }

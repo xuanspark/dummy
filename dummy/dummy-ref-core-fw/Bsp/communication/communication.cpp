@@ -3,7 +3,7 @@
 // ----------------------------------------------------------------------------
 //  - InitCommunication 起 commTask 线程，把 USB / UART / CAN 三条物理通道串起来
 //  - 处理 USB 端点列表的就绪标志（endpointListValid）
-//  - 提供 CommunicationTask（异步轮询所有通道）与 UsbDeferredInterruptTask
+//  - 提供 CommunicationTask（异步轮询所有通道）
 //  - 物理层细节在 interface_usb / interface_uart / interface_can 中实现
 // ============================================================================
 
@@ -34,36 +34,15 @@ void InitCommunication(void)
 {
     // Start command handling thread
     commTaskHandle = osThreadNew(CommunicationTask, nullptr, &commTask_attributes);
+    if (!commTaskHandle)
+    {
+        HandleRuntimeInitFailure();
+    }
 
     // 阻塞等待 commTask 完成 fibre publish。未就绪前不允许返回，
     // 否则主初始化继续处理运动 / RGB 可能拿到未初始化的 endpoint。
     while (!endpointListValid)
         osDelay(1);
-}
-
-extern PCD_HandleTypeDef hpcd_USB_OTG_FS;
-osThreadId_t usbIrqTaskHandle;
-
-// UsbDeferredInterruptTask: USB 中断中转线程。
-// USB OTG_FS 中断里只做一件事：释放 sem_usb_irq 信号量 + 禁下一次 IRQ。
-// 实际调用 HAL_PCD_IRQHandler 这种耗时逻辑在本线程里跳，
-// 这样避免 ISR 执行太久危及其他高优先级任务。
-void UsbDeferredInterruptTask(void* ctx)
-{
-    (void) ctx; // unused parameter
-
-    for (;;)
-    {
-        // 等一个者 USB 中断释放信号量（OTG_FS_IRQHandler）
-        osStatus semaphore_status = osSemaphoreAcquire(sem_usb_irq, osWaitForever);
-        if (semaphore_status == osOK)
-        {
-            // 由本线程接手处理本次 USB 事件
-            HAL_PCD_IRQHandler(&hpcd_USB_OTG_FS);
-            // 处理完毕后重新使能 IRQ，下一次中断才能进入
-            HAL_NVIC_EnableIRQ(OTG_FS_IRQn);
-        }
-    }
 }
 
 // CommunicationTask: 初始化线程体。顺序重要：
@@ -81,10 +60,14 @@ void CommunicationTask(void* ctx)
 
     // 让 InitCommunication 插点可以返回、主初始化继续
 
-    StartUartServer();
-    StartUsbServer();
-    StartCanServer(CAN1);
-    StartCanServer(CAN2);
+    const bool uartReady = StartUartServer();
+    const bool usbReady = StartUsbServer();
+    const bool can1Ready = StartCanServer(CAN1);
+    const bool can2Ready = StartCanServer(CAN2);
+    if (!uartReady || !usbReady || !can1Ready || !can2Ready)
+    {
+        HandleRuntimeInitFailure();
+    }
     endpointListValid = true;
     // 发布结束后释放大栈，避免常驻占用 45KB 导致动作或 RGB 任务创建失败。
     osThreadExit();

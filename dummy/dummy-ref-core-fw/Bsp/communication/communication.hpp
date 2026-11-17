@@ -20,7 +20,6 @@ extern "C" {
 void InitCommunication(void);                      // 初始化所有物理通道（USB / UART / CAN）
 void CommitProtocol();                             // 把对象树发布给 Fibre 远程协议
 void CommunicationTask(void *ctx);                 // 通信任务入口（FreeRTOS）
-void UsbDeferredInterruptTask(void *ctx);          // USB 中断延迟处理任务
 
 #ifdef __cplusplus
 }

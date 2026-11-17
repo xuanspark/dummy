@@ -63,7 +63,6 @@ void OnCanCmd(uint8_t _cmd, uint8_t* _data, uint32_t _len)
             }
             motor.controller->SetPositionSetPoint(
                 (int32_t) (*(float*) RxData * (float) motor.MOTOR_ONE_CIRCLE_SUBDIVIDE_STEPS));
-            printf("SET MOTOR[0x05] POSITION[]\r\n");
             if (_data[4]) // Need Position & Finished ACK
             {
                 tmpF = motor.controller->GetPosition();
@@ -135,11 +134,15 @@ void OnCanCmd(uint8_t _cmd, uint8_t* _data, uint32_t _len)
                 boardConfig.configStatus = CONFIG_COMMIT;
             break;
         case 0x14:  // Set Acceleration （and Store to EEPROM）
-            tmpF = *(float*) RxData * (float) motor.MOTOR_ONE_CIRCLE_SUBDIVIDE_STEPS;
-
+            tmpF = *(float*) RxData;
+            if (!(tmpF > 0.0f))
+                break;
+            tmpF *= (float) motor.MOTOR_ONE_CIRCLE_SUBDIVIDE_STEPS;
+            if (tmpF < 1.0f)
+                break;
             motor.config.motionParams.ratedVelocityAcc = (int32_t) tmpF;
-            motor.motionPlanner.velocityTracker.SetVelocityAcc((int32_t) tmpF);
-            motor.motionPlanner.positionTracker.SetVelocityAcc((int32_t) tmpF);
+            motor.motionPlanner.velocityTracker.SetVelocityAcc(motor.config.motionParams.ratedVelocityAcc);
+            motor.motionPlanner.positionTracker.SetVelocityAcc(motor.config.motionParams.ratedVelocityAcc);
             boardConfig.velocityAcc = motor.config.motionParams.ratedVelocityAcc;
             if (_data[4])
                 boardConfig.configStatus = CONFIG_COMMIT;
@@ -222,7 +225,6 @@ void OnCanCmd(uint8_t _cmd, uint8_t* _data, uint32_t _len)
             _data[4] = motor.controller->state == Motor::STATE_FINISH ? 1 : 0;
             txHeader.StdId = (boardConfig.canNodeId << 7) | 0x23;
             CAN_Send(&txHeader, _data);
-//            printf("CAN SEND BACK to NODE[%d]\n", boardConfig.canNodeId );
         }
             break;
         case 0x24: // Get Offset

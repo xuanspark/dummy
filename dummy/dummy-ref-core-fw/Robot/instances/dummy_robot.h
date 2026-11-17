@@ -13,6 +13,7 @@
 #include "actuators/ctrl_step/ctrl_step.hpp"
 #include "string"
 #include "rgb.hpp"
+#include "runtime_failure.hpp"
 #define ALL 0
 
 // EEPROM 地址分配
@@ -359,6 +360,8 @@ public:
         {
             commandFifo = osMessageQueueNew(16, sizeof(CommandMessage), nullptr);
         }
+
+        bool IsReady() const { return commandFifo != nullptr; }
 
         uint32_t Push(const std::string &_cmd, uint8_t channel = 0, uint32_t request = 0);
         std::string Pop(uint32_t timeout);

@@ -35,6 +35,10 @@ DummyRobot::~DummyRobot()
 }
 void DummyRobot::Init()
 {
+    if (!commandHandler.IsReady())
+    {
+        HandleRuntimeInitFailure();
+    }
     SetCommandMode(DEFAULT_COMMAND_MODE);
     SetJointSpeed(DEFAULT_JOINT_SPEED);
 }
@@ -111,6 +115,10 @@ void DummyRobot::InitSysCmdThread()
         .priority = osPriorityRealtime7,
     };
     emergencyTask = osThreadNew(EmergencyThread, this, &attr);
+    if (!emergencyTask)
+    {
+        HandleRuntimeInitFailure();
+    }
 }
 bool DummyRobot::PostSysCmd(SysCmd command, uint8_t channel)
 {
@@ -486,7 +494,7 @@ void DummyRobot::SetJointSpeed(float value)
 }
 void DummyRobot::SetJointAcceleration(float value)
 {
-    if (!std::isfinite(value) || value < 0 || value > 100) return;
+    if (!std::isfinite(value) || value <= 0 || value > 100) return;
     for (int n = 1; n <= 6; ++n) motorJ[n]->SetAcceleration(value / 100 * DEFAULT_JOINT_ACCELERATION_BASES.a[n - 1]);
 }
 void DummyRobot::SetCommandMode(uint32_t mode)

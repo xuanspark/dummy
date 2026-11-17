@@ -49,7 +49,6 @@
 /* USER CODE BEGIN Variables */
 
 // List of semaphores
-osSemaphoreId sem_usb_irq;
 osSemaphoreId sem_uart4_dma;
 osSemaphoreId sem_uart5_dma;
 osSemaphoreId sem_usb_rx;
@@ -92,10 +91,6 @@ void MX_FREERTOS_Init(void) {
   /* USER CODE END RTOS_MUTEX */
 
   /* USER CODE BEGIN RTOS_SEMAPHORES */
-    // Init usb irq binary semaphore, and start with no tokens by removing the starting one.
-    osSemaphoreDef(sem_usb_irq);
-    sem_usb_irq = osSemaphoreNew(1, 0, osSemaphore(sem_usb_irq));
-
     // Create a semaphore for UART DMA and remove a token
     osSemaphoreDef(sem_uart4_dma);
     sem_uart4_dma = osSemaphoreNew(1, 1, osSemaphore(sem_uart4_dma));
@@ -115,6 +110,11 @@ void MX_FREERTOS_Init(void) {
     sem_can1_tx = osSemaphoreNew(1, 1, osSemaphore(sem_can1_tx));
     osSemaphoreDef(sem_can2_tx);
     sem_can2_tx = osSemaphoreNew(1, 1, osSemaphore(sem_can2_tx));
+    if (!sem_uart4_dma || !sem_uart5_dma || !sem_usb_rx || !sem_usb_tx ||
+        !sem_can1_tx || !sem_can2_tx)
+    {
+        Error_Handler();
+    }
 
   /* USER CODE END RTOS_SEMAPHORES */
 
@@ -124,18 +124,15 @@ void MX_FREERTOS_Init(void) {
 
   /* USER CODE BEGIN RTOS_QUEUES */
     // This Task must run before MX_USB_DEVICE_Init(), so have to put it here.
-    const osThreadAttr_t usbIrqTask_attributes = {
-        .name = "usbIrqTask",
-        .stack_size = 500,
-        .priority = (osPriority_t) osPriorityAboveNormal,
-    };
-    usbIrqTaskHandle = osThreadNew(UsbDeferredInterruptTask, NULL, &usbIrqTask_attributes);
-
   /* USER CODE END RTOS_QUEUES */
 
   /* Create the thread(s) */
   /* creation of defaultTask */
   defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
+  if (!defaultTaskHandle)
+  {
+    Error_Handler();
+  }
 
   /* USER CODE BEGIN RTOS_THREADS */
     /* add threads, ... */

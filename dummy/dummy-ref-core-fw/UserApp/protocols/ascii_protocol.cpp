@@ -1,4 +1,5 @@
 #include "common_inc.h"
+#include "runtime_failure.hpp"
 #include "ascii_processor.hpp"
 #include <cctype>
 #include <cmath>
@@ -361,12 +362,18 @@ void Execute(const Message& message)
     }
     if (count == 3 && node >= 1 && node <= 7) {
         float value;
-        if (Number(arguments[2], value) && value >= 0) {
-            bool valid = true;
-            if (!strcmp(command, "#ACC_J")) dummy.motorJ[node]->SetAcceleration(value);
-            else if (!strcmp(command, "#SPEED_J")) dummy.motorJ[node]->SetVelocityLimit(value);
-            else if (!strcmp(command, "#I_LIMIT_J")) dummy.motorJ[node]->SetCurrentLimit(value);
-            else valid = false;
+        if (Number(arguments[2], value)) {
+            bool valid = false;
+            if (!strcmp(command, "#ACC_J") && value > 0) {
+                dummy.motorJ[node]->SetAcceleration(value);
+                valid = true;
+            } else if (!strcmp(command, "#SPEED_J") && value >= 0) {
+                dummy.motorJ[node]->SetVelocityLimit(value);
+                valid = true;
+            } else if (!strcmp(command, "#I_LIMIT_J") && value >= 0) {
+                dummy.motorJ[node]->SetCurrentLimit(value);
+                valid = true;
+            }
             if (valid) { Respond(output, "%s OK node=%lu", tag, node); return; }
         }
     }
@@ -446,12 +453,20 @@ bool ProcessAsciiCommand(uint32_t timeout)
 void InitAsciiCommands()
 {
     maintenanceQueue = osMessageQueueNew(16, sizeof(Message), nullptr);
+    if (!maintenanceQueue)
+    {
+        HandleRuntimeInitFailure();
+    }
     const osThreadAttr_t attributes = {
         .name = "QueryConfigTask",
         .stack_size = 3072,
         .priority = osPriorityNormal,
     };
-    osThreadNew(MaintenanceThread, nullptr, &attributes);
+    osThreadId_t maintenanceTaskHandle = osThreadNew(MaintenanceThread, nullptr, &attributes);
+    if (!maintenanceTaskHandle)
+    {
+        HandleRuntimeInitFailure();
+    }
 }
 void OnUsbAsciiCmd(const char* command, size_t length, StreamSink& output) { Receive(command, length, output); }
 void OnUart4AsciiCmd(const char* command, size_t length, StreamSink& output) { Receive(command, length, output); }

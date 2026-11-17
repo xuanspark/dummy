@@ -232,18 +232,21 @@ const osThreadAttr_t uartServerTask_attributes = {
     .priority = (osPriority_t) osPriorityNormal,
 };
 
-void StartUartServer()
+bool StartUartServer()
 {
     const osMutexAttr_t lockAttributes = { .name = "UartOutput", .attr_bits = osMutexPrioInherit };
     txLocks[0] = osMutexNew(&lockAttributes);
     txLocks[1] = osMutexNew(&lockAttributes);
+    if (!txLocks[0] || !txLocks[1]) return false;
     // DMA is set up to receive in a circular buffer forever.
     // We don't use interrupts to fetch the data, instead we periodically read
     // data out of the circular buffer into a parse buffer, controlled by a state machine
-    HAL_UART_Receive_DMA(&huart4, dma_rx_buffer[0], sizeof(dma_rx_buffer[0]));
+    if (HAL_UART_Receive_DMA(&huart4, dma_rx_buffer[0], sizeof(dma_rx_buffer[0])) != HAL_OK)
+        return false;
     dma_last_rcv_idx[0] = UART_RX_BUFFER_SIZE - huart4.hdmarx->Instance->NDTR;
 
-    HAL_UART_Receive_DMA(&huart5, dma_rx_buffer[1], sizeof(dma_rx_buffer[1]));
+    if (HAL_UART_Receive_DMA(&huart5, dma_rx_buffer[1], sizeof(dma_rx_buffer[1])) != HAL_OK)
+        return false;
     dma_last_rcv_idx[1] = UART_RX_BUFFER_SIZE - huart5.hdmarx->Instance->NDTR;
 
     // Start UART communication thread
@@ -251,7 +254,8 @@ void StartUartServer()
     const osThreadAttr_t emergencyAttributes = {
         .name = "UartEmergencyTask", .stack_size = 1024, .priority = osPriorityRealtime6,
     };
-    osThreadNew(UartEmergencyTask, nullptr, &emergencyAttributes);
+    osThreadId_t emergencyTaskHandle = osThreadNew(UartEmergencyTask, nullptr, &emergencyAttributes);
+    return uartServerTaskHandle != nullptr && emergencyTaskHandle != nullptr;
 }
 
 void HAL_UART_TxCpltCallback(UART_HandleTypeDef* huart)

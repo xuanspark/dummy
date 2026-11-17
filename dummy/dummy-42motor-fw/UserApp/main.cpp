@@ -66,6 +66,12 @@ void Main()
         };
         eeprom.put(0, boardConfig);
     }
+    if (boardConfig.velocityAcc <= 0)
+    {
+        boardConfig.velocityAcc = 100 * motor.MOTOR_ONE_CIRCLE_SUBDIVIDE_STEPS;
+        boardConfig.configStatus = CONFIG_COMMIT;
+        eeprom.put(0, boardConfig);
+    }
     boardConfig.enableTempWatch=false;
     // 节点 ID 不从 EEPROM 读，始终以 3 位拨码开关为准
     boardConfig.canNodeId = defaultNodeID;
