@@ -245,8 +245,28 @@ void HAL_CAN_ErrorCallback(CAN_HandleTypeDef* hcan)
         ctx->unexpected_errors++;
 }
 
-void CanSendMessage(CAN_context* canCtx, uint8_t* txData, CAN_TxHeaderTypeDef* txHeader)
+bool CanSendMessage(CAN_context* canCtx, uint8_t* txData, CAN_TxHeaderTypeDef* txHeader)
 {
+    extern DummyRobot dummy;
+    if (!canCtx || !canCtx->handle) return false;
+    uint8_t command = txHeader->StdId & 0x7f;
+    if (canCtx->handle->Instance == CAN1 && !dummy.CanTransmit(command, txData)) return false;
+    if (canCtx->handle->Instance == CAN1 && dummy.robotState == DummyRobot::STATE_EMERGENCY_STOP &&
+        (command == 0x04 || command == 0x01)) {
+        // 急停不等待普通发送信号量；撤销尚未发出的普通报文并直接抢占邮箱。
+        uint32_t mask = __get_PRIMASK();
+        __disable_irq();
+        static uint32_t abortedEpoch = 0;
+        // 每次急停只撤销一次，后续重试不能撤销已经排入的制动和保持使能报文。
+        if (abortedEpoch != dummy.stopEpoch) {
+            HAL_CAN_AbortTxRequest(canCtx->handle, CAN_TX_MAILBOX0 | CAN_TX_MAILBOX1 | CAN_TX_MAILBOX2);
+            abortedEpoch = dummy.stopEpoch;
+        }
+        uint32_t mailbox;
+        auto result = HAL_CAN_AddTxMessage(canCtx->handle, txHeader, txData, &mailbox);
+        __set_PRIMASK(mask);
+        return result == HAL_OK;
+    }
     // 第三道保险：超时改为 100ms，避免任何遗漏的"未释放信号量"路径再次拖死
     // 调用线程。CAN 节点正常应答的典型耗时 < 1ms，100ms 已是极宽裕；超时即
     // 安静放弃本次发送，让上层重试或被 dceQueryDone=false 反映为离线。
@@ -256,10 +276,22 @@ void CanSendMessage(CAN_context* canCtx, uint8_t* txData, CAN_TxHeaderTypeDef* t
     else if (canCtx->handle->Instance == CAN2)
         semaphore_status = osSemaphoreAcquire(sem_can2_tx, 100);
     else
-        return;
+        return false;
 
-    if (semaphore_status == osOK)
-        HAL_CAN_AddTxMessage(canCtx->handle, txHeader, txData, &canCtx->last_heartbeat_mailbox);
+    if (semaphore_status == osOK) {
+        uint32_t mask = __get_PRIMASK();
+        __disable_irq();
+        bool allowed = canCtx->handle->Instance != CAN1 || dummy.CanTransmit(command, txData);
+        HAL_StatusTypeDef result = allowed ?
+            HAL_CAN_AddTxMessage(canCtx->handle, txHeader, txData, &canCtx->last_heartbeat_mailbox) : HAL_ERROR;
+        __set_PRIMASK(mask);
+        if (result != HAL_OK) {
+            if (canCtx->handle->Instance == CAN1) osSemaphoreRelease(sem_can1_tx);
+            else osSemaphoreRelease(sem_can2_tx);
+        }
+        return result == HAL_OK;
+    }
     // 拿不到就直接返回 —— 上层 osDelay + 回调超时已经能识别该节点没回包。
+    return false;
 }
 

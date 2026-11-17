@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict, StrictInt
 
 from app.api.deps import get_robot
 from app.core.robot import Robot, RobotError
@@ -15,14 +15,16 @@ router = APIRouter(prefix="/api", tags=["robot"])
 # ---------- schemas ----------
 
 class JointMove(BaseModel):
+    model_config = ConfigDict(allow_inf_nan=False)
     joints: list[float] = Field(..., min_length=6, max_length=6)
     # Optional: when None, emits 6-arg wire form (firmware uses its current joint speed).
-    speed: Optional[float] = None
+    speed: Optional[float] = Field(None, gt=0, le=100)
 
 
 class CartMove(BaseModel):
+    model_config = ConfigDict(allow_inf_nan=False)
     pose: list[float] = Field(..., min_length=6, max_length=6)
-    speed: Optional[float] = None
+    speed: Optional[float] = Field(None, gt=0, le=100)
 
 
 class HandPos(BaseModel):
@@ -45,7 +47,7 @@ class RgbCustom(BaseModel):
 
 class RawCmd(BaseModel):
     command: str
-    timeout: Optional[float] = None
+    timeout: Optional[float] = Field(None, gt=0, le=3600, allow_inf_nan=False)
 
 
 class RebootBody(BaseModel):
@@ -74,9 +76,14 @@ class HandCurrentBody(BaseModel):
 
 
 class DceGainBody(BaseModel):
-    node: int = Field(..., ge=1, le=6)
+    node: int = Field(..., ge=1, le=7)
     kind: str = Field(..., pattern="^(kp|kv|ki|kd|KP|KV|KI|KD)$")
-    value: int = Field(..., ge=0)
+    value: int = Field(..., ge=0, le=2147483647, strict=True)
+
+
+class PidBody(BaseModel):
+    node: int = Field(..., ge=1, le=7)
+    values: dict[str, StrictInt]
 
 
 class MotionLimitBody(BaseModel):
@@ -105,6 +112,8 @@ _CATEGORY_HTTP_STATUS = {
 async def _run(coro):
     try:
         return await coro
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
     except RobotError as e:
         cat = getattr(e, "category", None)
         cat_str = cat.value if cat is not None else "unknown"
@@ -144,19 +153,19 @@ async def reset(r: Robot = Depends(get_robot)):
 @router.post("/estop")
 async def estop(r: Robot = Depends(get_robot)):
     await _run(r.estop())
-    return {"ok": True}
+    return {"ok": True, "state": r.state.motion_state}
 
 
 @router.post("/pause")
 async def pause(r: Robot = Depends(get_robot)):
     await _run(r.pause())
-    return {"ok": True}
+    return {"ok": True, "state": r.state.motion_state}
 
 
 @router.post("/resume")
 async def resume(r: Robot = Depends(get_robot)):
     await _run(r.resume())
-    return {"ok": True}
+    return {"ok": True, "state": r.state.motion_state}
 
 
 # ---------- motion ----------
@@ -200,6 +209,7 @@ async def state_full(r: Robot = Depends(get_robot)):
         "jpos": s.last_jpos.__dict__ if s.last_jpos else None,
         "lpos": s.last_lpos.__dict__ if s.last_lpos else None,
         "speed": s.last_speed,
+        "motion_state": s.motion_state,
     }
 
 
@@ -373,6 +383,17 @@ async def cmdmode(body: CmdModeBody, r: Robot = Depends(get_robot)):
 
 # ---------- tuning ----------
 
+@router.post("/pid")
+async def set_pid(body: PidBody, r: Robot = Depends(get_robot)):
+    response = await _run(r.set_pid(body.node, body.values))
+    return {"ok": response.ok, "raw": response.raw}
+
+
+@router.get("/pid")
+async def get_pid(node: Optional[int] = None, param: Optional[str] = None,
+                  r: Robot = Depends(get_robot)):
+    return await _run(r.get_dce(node, param, pid=True))
+
 @router.post("/dce/gain")
 async def dce_gain(body: DceGainBody, r: Robot = Depends(get_robot)):
     """``#SET_DCE_K{P,V,I,D} <node> <value>`` — node 1..6, value uint32."""
@@ -402,7 +423,7 @@ async def motion_limit(body: MotionLimitBody, r: Robot = Depends(get_robot)):
 
 # T11: 危险命令前缀白名单 — raw 接口默认禁止这些命令，需显式传 maintenance=true
 _DANGEROUS_PREFIXES = (
-    "#OFFSET_J", "#SET_DCE_", "#CMDMODE", "#REBOOT",
+    "#OFFSET_J", "#SET_DCE_", "#SETPID", "SETPID", "#CMDMODE", "#REBOOT",
     "#ACC_J", "#SPEED_J", "#I_LIMIT_J",
     "!CALIBRATION",
 )

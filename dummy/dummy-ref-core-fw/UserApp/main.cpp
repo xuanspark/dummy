@@ -37,7 +37,7 @@ void ThreadControlLoopFixUpdate(void* argument)
             // NORMAL 与 PAUSED 都正常运行控制环：
             //   - NORMAL：常规分发命令；
             //   - PAUSED：让当前未完成的动作自然继续到目标点；新命令在 ParseCommand 入口阻塞。
-            switch (dummy.commandMode)
+            if (dummy.IsMoving()) switch (dummy.commandMode)
             {
                 case DummyRobot::COMMAND_TARGET_POINT_SEQUENTIAL:
                 case DummyRobot::COMMAND_TARGET_POINT_INTERRUPTABLE:
@@ -46,20 +46,19 @@ void ThreadControlLoopFixUpdate(void* argument)
                     dummy.UpdateJointPose6D();
                     break;
                 case DummyRobot::COMMAND_MOTOR_TUNING:
-                    dummy.tuningHelper.Tick(10);
+                    dummy.MoveJoints(dummy.targetJoints);
                     dummy.UpdateJointPose6D();
                     break;
             }
+            else dummy.UpdateJointAngles();
         } else if (dummy.IsEnabled() && dummy.robotState == DummyRobot::STATE_EMERGENCY_STOP)
         {
             // 急停：每 tick 主动广播 V=0 实现机械制动（幂等）。
             // 这保证即使状态由 USB ISR 偷拍设置，也能在 5ms 内真正刹车，
             // 不依赖 OnUsbAsciiCmd 调用 EmergencyStop()。
-            dummy.motorJ[ALL]->SetVelocitySetPoint(0);
+            dummy.ApplyEmergencyBrake();
             dummy.UpdateJointAngles();
             // 同步 targetJoints 为当前位置，避免 RESUME 后 MoveJoints 跳动
-            for (int j = 0; j < 6; j++)
-                dummy.targetJoints.a[j] = dummy.currentJoints.a[j];
             dummy.UpdateJointPose6D();
         } else
         {
@@ -189,6 +188,7 @@ void Main(void)
     dummy.LoadRGBModeFromEEPROM();
     // 初始化异步系统命令线程（HOME/START/RESET/CLOSE 非阻塞执行）
     dummy.InitSysCmdThread();
+    InitAsciiCommands();
 
     // Init IMU.
     do

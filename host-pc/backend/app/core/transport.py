@@ -144,7 +144,7 @@ class SerialTransport(Transport):
         self._buf = b""
 
     def _open(self) -> None:
-        self._ser = serial.Serial(self._port_name, self._baud, timeout=0.2)
+        self._ser = serial.Serial(self._port_name, self._baud, timeout=0.2, write_timeout=0.2)
         self._buf = b""
 
     def _close(self) -> None:

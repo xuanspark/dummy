@@ -41,10 +41,11 @@ public:
 
     // 手爪独立的使能标志（与基类 state 解耦：基类 state 会被位置回调覆盖成 FINISH/RUNNING）
     bool enabledFlag = false;
-    void SetEnable(bool _enable)
+    bool SetEnable(bool _enable)
     {
+        if (!CtrlStepMotor::SetEnable(_enable)) return false;
         enabledFlag = _enable;
-        CtrlStepMotor::SetEnable(_enable);
+        return true;
     }
 
     float current=0.7;
@@ -187,7 +188,7 @@ public:
     {
         STATE_NORMAL = 0,        // 正常运行
         STATE_EMERGENCY_STOP,    // 急停（全轴同步机械停止，保持使能，保留队列）
-        STATE_PAUSED             // 暂停（全轴同步停止，保持使能，保留队列）
+        STATE_PAUSED             // 暂停（当前指令完成后等待，保持使能，保留队列）
     };
 
     volatile RobotState robotState = STATE_NORMAL;
@@ -271,7 +272,7 @@ public:
     void UpdateJointAnglesCallback();
     void UpdateJointPose6D();
     void Reboot();
-    void SetEnable(bool _enable);
+    bool SetEnable(bool _enable);
     void SetRGBEnable(bool _enable);
     bool GetRGBEnabled();
     void SetRGBMode(uint32_t mode);
@@ -288,18 +289,34 @@ public:
     bool CheckAllNodesOnline();                   // 全部节点检测
     void OnlineCheckTick(uint32_t deltaMs);       // 定时检查 tick（5 分钟）
     bool AllNodesVerified() const { return allNodesOnline; }
-    void CalibrateHomeOffset();
-    void Homing();
-    void Resting();
+    bool CalibrateHomeOffset();
+    bool CalibrateHand();
+    bool Homing();
+    bool Resting();
     // !START：使能机械臂 + 使能手爪 + 回零点姿态（REST_POSE）。会重置 isHomed=false。
-    void Startup();
+    bool Startup();
     // !CLOSE：先回零点姿态 → 然后失能机械臂+手爪。会重置 isHomed=false。
-    void Shutdown();
+    bool Shutdown();
+    bool Disable();
+    bool EnsureHomed();
+    bool WaitReady();
+    bool RunPose(const DOF6Kinematic::Joint6D_t& pose, float speed);
+    bool RunHand(const char* command);
+    bool TaskActive() const { return taskActive; }
+    const char* StateName() const;
+    void RequestEmergencyStop();
+    void ApplyEmergencyBrake();
+    bool CanTransmit(uint8_t command, const uint8_t* data) const;
+    volatile uint32_t stopEpoch = 0;
+    volatile bool taskActive = false;
+    volatile uint32_t scheduledActions = 0;
+    volatile bool maintenanceActive = false;
     // 手爪动作的 RGB 联动 hook。open=true → 工作状态(绿)，false → 完成状态(青，5s回待机)。
     void OnHandActionRGBHook(bool _open);
     bool IsMoving();
     bool IsEnabled();
     bool IsHomed() const { return isHomed; }
+    void InvalidateHome() { isHomed = false; }
     float GetJointSpeed() const { return jointSpeed; }
     void SetCommandMode(uint32_t _mode);
 
@@ -323,9 +340,6 @@ public:
     auto MakeProtocolDefinitions()
     {
         return make_protocol_member_list(
-            make_protocol_function("calibrate_home_offset", *this, &DummyRobot::CalibrateHomeOffset),
-            make_protocol_function("homing", *this, &DummyRobot::Homing),
-            make_protocol_function("resting", *this, &DummyRobot::Resting),
             make_protocol_object("joint_1", motorJ[1]->MakeProtocolDefinitions()),
             make_protocol_object("joint_2", motorJ[2]->MakeProtocolDefinitions()),
             make_protocol_object("joint_3", motorJ[3]->MakeProtocolDefinitions()),
@@ -333,16 +347,7 @@ public:
             make_protocol_object("joint_5", motorJ[5]->MakeProtocolDefinitions()),
             make_protocol_object("joint_6", motorJ[6]->MakeProtocolDefinitions()),
             make_protocol_object("joint_all", motorJ[ALL]->MakeProtocolDefinitions()),
-            make_protocol_function("reboot", *this, &DummyRobot::Reboot),
-            make_protocol_function("set_enable", *this, &DummyRobot::SetEnable, "enable"),
-            make_protocol_function("set_rgb_enable", *this, &DummyRobot::SetRGBEnable, "enable"),
-            make_protocol_function("set_rgb_mode", *this, &DummyRobot::SetRGBMode, "mode"),
-            make_protocol_function("move_j", *this, &DummyRobot::MoveJ, "j1", "j2", "j3", "j4", "j5", "j6"),
-            make_protocol_function("move_l", *this, &DummyRobot::MoveL, "x", "y", "z", "a", "b", "c"),
-            make_protocol_function("set_joint_speed", *this, &DummyRobot::SetJointSpeed, "speed"),
-            make_protocol_function("set_joint_acc", *this, &DummyRobot::SetJointAcceleration, "acc"),
-            make_protocol_function("set_command_mode", *this, &DummyRobot::SetCommandMode, "mode"),
-            make_protocol_object("tuning", tuningHelper.MakeProtocolDefinitions())
+            make_protocol_function("get_rgb_mode", *this, &DummyRobot::GetRGBMode)
         );
     }
 
@@ -352,10 +357,10 @@ public:
     public:
         explicit CommandHandler(DummyRobot* _context) : context(_context)
         {
-            commandFifo = osMessageQueueNew(16, 64, nullptr);
+            commandFifo = osMessageQueueNew(16, sizeof(CommandMessage), nullptr);
         }
 
-        uint32_t Push(const std::string &_cmd);
+        uint32_t Push(const std::string &_cmd, uint8_t channel = 0, uint32_t request = 0);
         std::string Pop(uint32_t timeout);
         uint32_t ParseCommand(const std::string &_cmd);
         uint32_t GetSpace();
@@ -368,7 +373,13 @@ public:
     private:
         DummyRobot* context;
         osMessageQueueId_t commandFifo;
-        char strBuffer[64]{};
+        struct CommandMessage {
+            char text[128];
+            uint8_t channel;
+            uint32_t request;
+        };
+        uint8_t activeChannel = 0;
+        uint32_t activeRequest = 0;
     };
     CommandHandler commandHandler = CommandHandler(this);
 
@@ -380,9 +391,14 @@ private:
 //    DOF6Kinematic::Joint6D_t dynamicJointSpeeds = {1, 1, 1, 1, 1, 1};
     DOF6Kinematic::Joint6D_t dynamicJointSpeeds = {0.5, 0.3, 0.2, 1, 1, 1};
     DOF6Kinematic* dof6Solver;
-    bool isEnabled = false;
+    volatile bool isEnabled = false;
+    volatile bool disableAuthorized = false;
+    volatile bool enableTransitionActive = false;
+    volatile bool restoreEnablePending = false;
+    volatile bool armMotionActive = false;
+    bool SaveNodeOffset(uint8_t node);
     // 是否已执行过 !HOME 校位。!START / SetEnable(false) 会复位为 false。
-    // 任何会产生运动的用户命令在未 home 时被拒绝（见 ParseCommand 与 Push）。
+    // 运动和手爪命令在未 HOME 时先静默归位。
     volatile bool isHomed = false;
     bool isRGBEnabled = true;
     uint32_t rgbMode = 11;          // 默认自动模式

@@ -65,7 +65,7 @@ class ConnectionManager:
 
     @property
     def is_connected(self) -> bool:
-        return self._robot is not None and self._robot.state.connected
+        return self._robot is not None and self._robot.state.connected and self._robot._t.connected
 
     @property
     def port(self) -> Optional[str]:
@@ -80,7 +80,7 @@ class ConnectionManager:
             if self._robot is not None:
                 raise RuntimeError("already connected; disconnect first")
             transport = SerialTransport(port, baud)
-            robot = Robot(transport, default_timeout=self._default_timeout)
+            robot = Robot(transport, default_timeout=self._default_timeout, correlated=True)
             try:
                 await robot.start()
             except Exception as e:

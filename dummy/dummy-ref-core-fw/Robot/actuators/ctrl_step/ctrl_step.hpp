@@ -42,7 +42,7 @@ public:
     void SetAngle(float _angle);
     void SetAngleWithVelocityLimit(float _angle, float _vel);
     // CAN Command
-    void SetEnable(bool _enable);
+    bool SetEnable(bool _enable);
     void SetEnableTemp(bool _enable);
     void DoCalibration();
     void SetCurrentSetPoint(float _val);
@@ -71,6 +71,13 @@ public:
     volatile int32_t dceKi = 0;
     volatile int32_t dceKd = 0;
     volatile bool    dceQueryDone = false;  // 标记本轮查询是否有回调
+    volatile uint8_t dceReceivedMask = 0;
+    volatile uint32_t lastAngleTick = 0;
+    volatile uint32_t angleSequence = 0;
+    volatile bool configQueryDone = false;
+    volatile bool configSaved = false;
+    void QueryConfigSaved();
+    void ConfigSavedCallback(bool saved);
 
     // ---- 在线检测 ----
     void QueryOnline();                     // 发 CAN 探测帧
@@ -78,7 +85,7 @@ public:
     volatile bool isOnline = false;         // 当前在线状态
     volatile uint32_t lastResponseTick = 0; // 最近一次回调的 tick
 
-    void ApplyPositionAsHome();
+    bool ApplyPositionAsHome();
     void SetEnableOnBoot(bool _enable);
     void SetEnableStallProtect(bool _enable);
     void Reboot();
@@ -94,29 +101,7 @@ public:
     {
         return make_protocol_member_list(
             make_protocol_ro_property("angle", &angle),
-            make_protocol_function("reboot", *this, &CtrlStepMotor::Reboot),
             make_protocol_function("get_temperature", *this, &CtrlStepMotor::GetTemp),
-            make_protocol_function("set_enable_temperature", *this, &CtrlStepMotor::SetEnableTemp, "enable"),
-            make_protocol_function("erase_configs", *this, &CtrlStepMotor::EraseConfigs),
-            make_protocol_function("set_enable", *this, &CtrlStepMotor::SetEnable, "enable"),
-            make_protocol_function("set_position_with_time", *this,
-                                   &CtrlStepMotor::SetPositionWithVelocityLimit, "pos", "time"),
-            make_protocol_function("set_position", *this, &CtrlStepMotor::SetPositionSetPoint, "pos"),
-            make_protocol_function("set_velocity", *this, &CtrlStepMotor::SetVelocitySetPoint, "vel"),
-            make_protocol_function("set_velocity_limit", *this, &CtrlStepMotor::SetVelocityLimit, "vel"),
-            make_protocol_function("set_current", *this, &CtrlStepMotor::SetCurrentSetPoint, "current"),
-            make_protocol_function("set_current_limit", *this, &CtrlStepMotor::SetCurrentLimit, "current"),
-            make_protocol_function("set_node_id", *this, &CtrlStepMotor::SetNodeID, "id"),
-            make_protocol_function("set_acceleration", *this, &CtrlStepMotor::SetAcceleration, "acc"),
-            make_protocol_function("apply_home_offset", *this, &CtrlStepMotor::ApplyPositionAsHome),
-            make_protocol_function("do_calibration", *this, &CtrlStepMotor::DoCalibration),
-            make_protocol_function("set_enable_on_boot", *this, &CtrlStepMotor::SetEnableOnBoot, "enable"),
-            make_protocol_function("set_dce_kp", *this, &CtrlStepMotor::SetDceKp, "vel"),
-            make_protocol_function("set_dce_kv", *this, &CtrlStepMotor::SetDceKv, "vel"),
-            make_protocol_function("set_dce_ki", *this, &CtrlStepMotor::SetDceKi, "vel"),
-            make_protocol_function("set_dce_kd", *this, &CtrlStepMotor::SetDceKd, "vel"),
-            make_protocol_function("set_enable_stall_protect", *this, &CtrlStepMotor::SetEnableStallProtect,
-                                   "enable"),
             make_protocol_function("update_angle", *this, &CtrlStepMotor::UpdateAngle)
         );
     }
@@ -124,8 +109,7 @@ public:
 
 private:
     CAN_HandleTypeDef* hcan;
-    uint8_t canBuf[8] = {};
-    CAN_TxHeaderTypeDef txHeader = {};
+    bool Send(uint8_t command, const void* value = nullptr, uint8_t save = 0);
 };
 
 #endif //DUMMY_CORE_FW_CTRL_STEP_HPP

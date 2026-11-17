@@ -1,15 +1,16 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { ElButton, ElSwitch, ElMessage } from 'element-plus'
+import { ElSwitch } from 'element-plus'
 import CartControl from '@/components/CartControl.vue'
 import ConnectionPanel from '@/components/ConnectionPanel.vue'
-import DceTuning from '@/components/DceTuning.vue'
+import DceTuning from '@/components/PidTuning/PidTuning.vue'
+import SafetyControls from '@/components/SafetyControls/SafetyControls.vue'
 import DiagPanel from '@/components/DiagPanel.vue'
-import HandClaw from '@/components/HandClaw.vue'
+import HandClaw from '@/components/HandClaw/HandClaw.vue'
 import JointControl from '@/components/JointControl.vue'
 import LogConsole from '@/components/LogConsole.vue'
 import QuickCommands from '@/components/QuickCommands.vue'
-import RgbPanel from '@/components/RgbPanel.vue'
+import RgbPanel from '@/components/RgbPanel/RgbPanel.vue'
 import { useRobotStore } from '@/stores/robot'
 
 const store = useRobotStore()
@@ -18,15 +19,6 @@ const dryRun = computed({
   set: (v: boolean) => store.setDryRun(v),
 })
 
-// Always-available safety / recovery buttons in the header.
-const canOperate = computed(() => store.isConnected || store.dryRun)
-async function safetyCmd(cmd: string) {
-  if (!canOperate.value) {
-    ElMessage.warning('Not connected (or enable Dry-run)')
-    return
-  }
-  try { await store.sendRaw(cmd) } catch { /* logged */ }
-}
 
 // Tab routing — persist last-active tab in localStorage
 type Tab = 'home' | 'cart' | 'diag' | 'tuning'
@@ -38,38 +30,25 @@ function setTab(t: Tab) {
 }
 
 const tabs: Array<{ key: Tab; label: string }> = [
-  { key: 'home',   label: 'Home' },
-  { key: 'cart',   label: 'Cartesian' },
-  { key: 'diag',   label: 'Diagnostics' },
-  { key: 'tuning', label: 'DCE Tuning' },
+  { key: 'home',   label: '机械臂控制' },
+  { key: 'cart',   label: '笛卡尔控制' },
+  { key: 'diag',   label: '设备诊断' },
+  { key: 'tuning', label: 'PIDV 参数' },
 ]
 </script>
 
 <template>
   <div class="app-layout">
     <header class="app-header">
-      <h1>Dummy Robot Controller</h1>
-      <span class="tagline">Python backend · Vue frontend · serial direct</span>
+      <h1>Dummy 机械臂控制台</h1>
+      <span class="tagline">串口直连控制</span>
       <span class="spacer" />
 
       <!-- Global safety controls — reachable from every tab -->
-      <div class="safety-group">
-        <ElButton
-          type="danger" size="small"
-          :disabled="!canOperate" @click="safetyCmd('!STOP')"
-        >E-STOP</ElButton>
-        <ElButton
-          type="warning" size="small"
-          :disabled="!canOperate" @click="safetyCmd('!PAUSE')"
-        >PAUSE</ElButton>
-        <ElButton
-          type="success" size="small"
-          :disabled="!canOperate" @click="safetyCmd('!RESUME')"
-        >RESUME</ElButton>
-      </div>
+      <SafetyControls />
 
-      <span class="dry-run-label" :class="{ on: dryRun }">Dry-run</span>
-      <ElSwitch v-model="dryRun" inline-prompt active-text="ON" inactive-text="OFF" />
+      <span class="dry-run-label" :class="{ on: dryRun }">模拟运行</span>
+      <ElSwitch v-model="dryRun" inline-prompt active-text="开" inactive-text="关" />
     </header>
 
     <nav class="tab-bar">

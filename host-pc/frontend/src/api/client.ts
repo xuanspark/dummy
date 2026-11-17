@@ -9,9 +9,9 @@ const http = axios.create({
 
 http.interceptors.response.use(
   (r) => r,
-  (err: AxiosError<{ detail?: string }>) => {
+  (err: AxiosError<{ detail?: string | { message?: string } }>) => {
     const detail = err.response?.data?.detail || err.message
-    return Promise.reject(new Error(detail))
+    return Promise.reject(new Error(typeof detail === 'string' ? detail : detail.message || '请求失败'))
   },
 )
 
@@ -75,22 +75,22 @@ export const api = {
   disconnect: () => http.post<ConnectionState>('/api/disconnect').then((r) => r.data),
 
   // ---------- robot lifecycle ----------
-  start: () => http.post('/api/start').then((r) => r.data),
-  close: () => http.post('/api/close').then((r) => r.data),
-  home: () => http.post('/api/home').then((r) => r.data),
-  reset: () => http.post('/api/reset').then((r) => r.data),
-  estop: () => http.post('/api/estop').then((r) => r.data),
-  pause: () => http.post('/api/pause').then((r) => r.data),
-  resume: () => http.post('/api/resume').then((r) => r.data),
+  start: () => http.post('/api/start', {}, { timeout: 0 }).then((r) => r.data),
+  close: () => http.post('/api/close', {}, { timeout: 0 }).then((r) => r.data),
+  home: () => http.post('/api/home', {}, { timeout: 0 }).then((r) => r.data),
+  reset: () => http.post('/api/reset', {}, { timeout: 0 }).then((r) => r.data),
+  estop: () => http.post<{ ok: boolean; state: string }>('/api/estop').then((r) => r.data),
+  pause: () => http.post<{ ok: boolean; state: string }>('/api/pause').then((r) => r.data),
+  resume: () => http.post<{ ok: boolean; state: string }>('/api/resume').then((r) => r.data),
 
   // ---------- motion ----------
   // speed === undefined  → omit (firmware uses its current speed; 6-arg wire form)
   // speed === number     → override speed for this move (7-arg wire form)
   moveJoint: (joints: number[], speed?: number) =>
-    http.post('/api/move/joint', speed == null ? { joints } : { joints, speed })
+    http.post('/api/move/joint', speed == null ? { joints } : { joints, speed }, { timeout: 0 })
       .then((r) => r.data),
   moveCart: (pose: number[], speed?: number) =>
-    http.post('/api/move/cart', speed == null ? { pose } : { pose, speed })
+    http.post('/api/move/cart', speed == null ? { pose } : { pose, speed }, { timeout: 0 })
       .then((r) => r.data),
 
   // ---------- queries ----------
@@ -99,12 +99,12 @@ export const api = {
   getSpeed: () => http.get<{ speed: number }>('/api/state/speed').then((r) => r.data.speed),
 
   // ---------- hand ----------
-  handOpen: () => http.post('/api/hand/open').then((r) => r.data),
-  handClose: () => http.post('/api/hand/close').then((r) => r.data),
+  handOpen: () => http.post('/api/hand/open', {}, { timeout: 0 }).then((r) => r.data),
+  handClose: () => http.post('/api/hand/close', {}, { timeout: 0 }).then((r) => r.data),
   handEnable: (enable: boolean) => http.post('/api/hand/enable', { enable }).then((r) => r.data),
-  handPos: (percent: number) => http.post('/api/hand/pos', { percent }).then((r) => r.data),
+  handPos: (percent: number) => http.post('/api/hand/pos', { percent }, { timeout: 0 }).then((r) => r.data),
   handZero: () =>
-    http.post<{ ok: boolean; closed: number; opened: number }>('/api/hand/zero')
+    http.post<{ ok: boolean; closed: number; opened: number }>('/api/hand/zero', {}, { timeout: 0 })
       .then((r) => r.data),
   handCurrent: (amps: number) => http.post('/api/hand/current', { amps }).then((r) => r.data),
 
@@ -113,6 +113,10 @@ export const api = {
     http.post<{ ok: boolean; tag: string; rest: string; raw: string }>(
       '/api/dce/gain', { node, kind, value },
     ).then((r) => r.data),
+  setPid: (node: number, values: Partial<Record<DceKind, number>>) =>
+    http.post('/api/pid', { node, values }).then(r => r.data),
+  getPid: (node?: number, param?: DceKind) =>
+    http.get<DceResult>('/api/pid', { params: { node, param } }).then(r => r.data),
   getDce: (node?: number, param?: DceKind) => {
     const params: Record<string, string | number> = {}
     if (node != null) params.node = node
@@ -154,7 +158,7 @@ export const api = {
   // ---------- raw ----------
   raw: (command: string, timeout?: number) =>
     http.post<{ ok: boolean; tag: string; rest: string; error: string; raw: string }>(
-      '/api/raw', { command, timeout },
+      '/api/raw', { command, timeout }, { timeout: 0 },
     ).then((r) => r.data),
 }
 
@@ -162,7 +166,7 @@ export const api = {
 
 export type WsMessage =
   | { type: 'state'; connected: boolean; port?: string; baud?: number
-      jpos: JointPos | null; lpos: CartPos | null; speed: number | null; message?: string }
+      jpos: JointPos | null; lpos: CartPos | null; speed: number | null; message?: string; motion_state?: string }
   | { type: 'log'; line: string; noise?: boolean }
   | { type: 'response'; tag: string; ok: boolean; rest: string; error: string }
   | { type: 'pong' }
@@ -183,8 +187,10 @@ export class RobotWs {
 
   connect() {
     if (this.ws && this.ws.readyState !== WebSocket.CLOSED) return
-    this.ws = new WebSocket(this.url)
-    this.ws.onmessage = (ev) => {
+    const socket = new WebSocket(this.url)
+    this.ws = socket
+    socket.onmessage = (ev) => {
+      if (this.ws !== socket) return
       try {
         const msg = JSON.parse(ev.data) as WsMessage
         this.handlers.forEach((h) => h(msg))
@@ -192,7 +198,8 @@ export class RobotWs {
         /* ignore malformed */
       }
     }
-    this.ws.onclose = () => {
+    socket.onclose = () => {
+      if (this.ws !== socket) return
       this.ws = null
       // Auto-reconnect after 1.5s
       if (this.reconnectTimer == null) {
@@ -215,7 +222,8 @@ export class RobotWs {
       clearTimeout(this.reconnectTimer)
       this.reconnectTimer = null
     }
-    this.ws?.close()
+    const socket = this.ws
     this.ws = null
+    socket?.close()
   }
 }

@@ -49,6 +49,9 @@ else ()
     add_compile_options(-Og -g)
 endif ()
 
+# 协议与反馈校验依赖 NaN/Inf 检测，发布构建也必须保留有限数判断。
+add_compile_options(-fno-finite-math-only)
+
 include_directories(
         Core/Inc
         Drivers/STM32F4xx_HAL_Driver/Inc

@@ -8,6 +8,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import secrets
+import time
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -35,13 +37,14 @@ class RobotState:
     last_jpos: Optional[P.JointPos] = None
     last_lpos: Optional[P.CartPos] = None
     last_speed: Optional[float] = None
+    motion_state: str = "UNKNOWN"
     log_tail: list[str] = field(default_factory=list)
 
 
 class Robot:
     """Owns a Transport and serializes command/response transactions."""
 
-    def __init__(self, transport: Transport, default_timeout: float = 5.0) -> None:
+    def __init__(self, transport: Transport, default_timeout: float = 5.0, correlated: bool = False) -> None:
         self._t = transport
         self._timeout = default_timeout
         self._cmd_lock = asyncio.Lock()
@@ -49,6 +52,10 @@ class Robot:
         self.state = RobotState()
         self._dispatcher_task: Optional[asyncio.Task] = None
         self._pending: asyncio.Queue[P.Response] | None = None
+        self._correlated = correlated
+        self._request_id = secrets.randbelow(1_000_000_000) + 1
+        self._suspended_total = 0.0
+        self._suspended_since: float | None = None
 
     # ---- lifecycle ----
     async def start(self) -> None:
@@ -90,6 +97,7 @@ class Robot:
                 continue
             try:
                 self._record_log(line)
+                self._update_motion_state(line)
                 resp = P.parse_response(line)
                 if resp is None:
                     continue
@@ -144,6 +152,88 @@ class Robot:
         if len(tail) > 200:
             del tail[: len(tail) - 200]
 
+    def _update_motion_state(self, line: str) -> None:
+        _, payload = P.unwrap_response(line)
+        match = re.search(r"\bSTATE[:=](NORMAL|PAUSED|EMERGENCY_STOP)\b", payload, re.I)
+        if match:
+            state = match[1].upper()
+            blocked = state in {"PAUSED", "EMERGENCY_STOP"}
+            if blocked and self._suspended_since is None:
+                self._suspended_since = time.monotonic()
+            elif not blocked and self._suspended_since is not None:
+                self._suspended_total += time.monotonic() - self._suspended_since
+                self._suspended_since = None
+            self.state.motion_state = state
+
+    def _active_time(self, action: bool) -> float:
+        now = time.monotonic()
+        if not action:
+            return now
+        paused = self._suspended_total
+        if self._suspended_since is not None:
+            paused += now - self._suspended_since
+        return now - paused
+
+    def _next_request(self, command: str) -> tuple[int, str]:
+        self._request_id = self._request_id % 2_000_000_000 + 1
+        return self._request_id, f"T:{self._request_id} {command}"
+
+    async def _exchange(self, command: str, timeout: float, collect: bool = False) -> list[str]:
+        """按事务编号等待响应；动作等待期间仍可查询、急停和恢复。"""
+        request, wire = self._next_request(command)
+        tag = P.expected_tag(command)
+        sub = self._t.subscribe()
+        lines: list[str] = []
+        action = command.startswith(("&", "@", ">", "!START", "!HOME", "!RESET", "!CLOSE", "!HD_O", "!HD_C", "!HD_POS"))
+        remaining = timeout
+        queued = False
+        executing = False
+        previous = self._active_time(action)
+        try:
+            self._t.write_line(wire)
+            while remaining > 0:
+                try:
+                    raw = await asyncio.wait_for(sub.queue.get(), timeout=min(remaining, 0.2))
+                except asyncio.TimeoutError:
+                    raw = None
+                if raw is not None:
+                    self._update_motion_state(raw)
+                now = self._active_time(action)
+                if not queued:
+                    remaining -= now - previous
+                previous = now
+                if raw is None:
+                    if not getattr(self._t, "connected", self.state.connected):
+                        raise RobotError("设备已断开", P.ErrorCategory.COMM_TIMEOUT)
+                    continue
+                response_id, line = P.unwrap_response(raw)
+                if response_id != request:
+                    continue
+                if action and line.startswith(f"{tag} Accepted"):
+                    queued = not executing
+                    continue
+                if action and line.startswith("Task Executing"):
+                    queued = False
+                    executing = True
+                    previous = self._active_time(action)
+                    continue
+                response = P.parse_response(line)
+                if response and response.tag == tag and not response.ok:
+                    raise RobotError(f"{tag} failed: {response.error}", response.error_category)
+                if collect:
+                    lines.append(line)
+                    if line == f"{tag} End" or (response and response.tag == tag and tag in {"GetDce", "GetPid"}):
+                        return lines
+                elif response and response.tag == tag:
+                    return [line]
+            raise RobotError(f"timeout waiting for {tag}", P.ErrorCategory.COMM_TIMEOUT)
+        except RobotError:
+            raise
+        except Exception as error:
+            raise RobotError(f"通信失败：{error}", P.ErrorCategory.COMM_TIMEOUT) from error
+        finally:
+            self._t.unsubscribe(sub)
+
     # ---- internal: priority send for safety commands (bypasses _cmd_lock) ----
     async def _send_priority(self, cmd: str, timeout: Optional[float] = None) -> P.Response:
         """Send a safety-critical command without waiting for _cmd_lock.
@@ -153,8 +243,13 @@ class Robot:
         transport; we then wait for the matching tag on a *dedicated*
         subscription so we don't steal tokens from ``_exec``.
         """
-        tag = P.expected_tag(cmd)
+        try:
+            tag = P.expected_tag(cmd)
+        except (KeyError, ValueError) as error:
+            raise RobotError("不支持的指令", P.ErrorCategory.BAD_ARGS) from error
         timeout = timeout if timeout is not None else 2.0
+        if self._correlated:
+            return P.parse_response((await self._exchange(cmd, timeout))[0])
         sub = self._t.subscribe()
         try:
             try:
@@ -180,8 +275,17 @@ class Robot:
 
     # ---- internal: send + await matching response ----
     async def _exec(self, cmd: str, timeout: Optional[float] = None) -> P.Response:
-        tag = P.expected_tag(cmd)
+        try:
+            cmd = P.normalize_command(cmd)
+        except ValueError as error:
+            raise RobotError(str(error), P.ErrorCategory.BAD_ARGS) from error
+        try:
+            tag = P.expected_tag(cmd)
+        except (KeyError, ValueError) as error:
+            raise RobotError("不支持的指令", P.ErrorCategory.BAD_ARGS) from error
         timeout = timeout if timeout is not None else self._timeout
+        if self._correlated:
+            return P.parse_response((await self._exchange(cmd, timeout))[0])
         async with self._cmd_lock:
             assert self._pending is not None
             # Drain stale responses left over from spurious events
@@ -217,16 +321,16 @@ class Robot:
 
     # ---- public commands ----
     async def start_robot(self) -> None:
-        await self._exec("!START", timeout=15.0)
+        await self._exec("!START", timeout=300.0)
 
     async def shutdown_robot(self) -> None:
-        await self._exec("!CLOSE", timeout=15.0)
+        await self._exec("!CLOSE", timeout=300.0)
 
     async def home(self) -> None:
-        await self._exec("!HOME", timeout=20.0)
+        await self._exec("!HOME", timeout=300.0)
 
     async def reset_pose(self) -> None:
-        await self._exec("!RESET", timeout=20.0)
+        await self._exec("!RESET", timeout=300.0)
 
     async def estop(self) -> None:
         await self._send_priority("!STOP", timeout=2.0)
@@ -239,23 +343,23 @@ class Robot:
 
     async def move_j(self, j: list[float], speed: Optional[float] = None) -> None:
         """``&j1..j6[,speed]`` — pass ``speed=None`` to use the firmware's current speed."""
-        await self._exec(P.cmd_move_j(j, speed), timeout=30.0)
+        await self._exec(P.cmd_move_j(j, speed), timeout=300.0)
 
     async def move_l(self, pose: list[float], speed: Optional[float] = None) -> None:
         """``@x,y,z,a,b,c[,speed]`` — pass ``speed=None`` to use the firmware's current speed."""
-        await self._exec(P.cmd_move_l(pose, speed), timeout=30.0)
+        await self._exec(P.cmd_move_l(pose, speed), timeout=300.0)
 
     async def hand_open(self) -> None:
-        await self._exec("!HD_O")
+        await self._exec("!HD_O", timeout=300.0)
 
     async def hand_close(self) -> None:
-        await self._exec("!HD_C")
+        await self._exec("!HD_C", timeout=300.0)
 
     async def hand_enable(self, enable: bool) -> None:
-        await self._exec("!HD_EN" if enable else "!HD_DIS")
+        raise RobotError("手爪随 START 使能，随 CLOSE 回零完成后失能", P.ErrorCategory.STATE_BLOCKED)
 
     async def hand_pos(self, percent: int) -> None:
-        await self._exec(P.cmd_hand_pos(percent))
+        await self._exec(P.cmd_hand_pos(percent), timeout=300.0)
 
     async def rgb_on(self) -> None:
         await self._exec("!RGB_ON")
@@ -297,7 +401,15 @@ class Robot:
 
     async def raw(self, cmd: str, timeout: Optional[float] = None) -> P.Response:
         """Escape hatch for arbitrary commands."""
-        return await self._exec(cmd, timeout=timeout)
+        try:
+            cmd = P.normalize_command(cmd)
+        except ValueError as error:
+            raise RobotError(str(error), P.ErrorCategory.BAD_ARGS) from error
+        if cmd in {"!STOP", "!PAUSE", "!RESUME"}:
+            return await self._send_priority(cmd, timeout)
+        if cmd in {"!HD_DIS", "!HD_EN", "!DISABLE"}:
+            raise RobotError("请使用 START 或 CLOSE 管理使能状态", P.ErrorCategory.STATE_BLOCKED)
+        return await self._exec(cmd, timeout=timeout or (300 if cmd.startswith(("&", "@", ">", "!START", "!CLOSE", "!HOME", "!RESET", "!HD_")) else None))
 
     # ---- internal: multi-line command with quiet-window aggregation ----
     async def _collect_lines(self, cmd: str, start_predicate,
@@ -315,6 +427,8 @@ class Robot:
         plain-text lines with no single "OK" tag to wait on (e.g. ``#ONLINE``
         full-scan, ``#GET_DCE``).
         """
+        if self._correlated:
+            return await self._exchange(cmd, total_timeout, collect=True)
         async with self._cmd_lock:
             sub = self._t.subscribe()
             try:
@@ -451,7 +565,7 @@ class Robot:
         routine completes. Timeout is generous as calibration can drive all
         joints through a small motion.
         """
-        await self._exec("!CALIBRATION", timeout=30.0)
+        await self._exec("!CALIBRATION", timeout=300.0)
 
     async def offset_joint(self, target) -> P.Response:
         """``#OFFSET_J <1-7|all>`` — persist current position as home offset (writes NVS).
@@ -492,7 +606,7 @@ class Robot:
     # ---- hand ----
     async def hand_zero(self) -> tuple[float, float]:
         """``!HD_ZERO`` — run gripper auto-calibration; returns (closed_angle, opened_angle)."""
-        resp = await self._exec("!HD_ZERO", timeout=15.0)
+        resp = await self._exec("!HD_ZERO", timeout=300.0)
         # Response rest: "MIN:X MAX:Y"
         m = re.search(r"MIN:\s*(-?\d+(?:\.\d+)?)\s+MAX:\s*(-?\d+(?:\.\d+)?)", resp.rest)
         if not m:
@@ -513,21 +627,36 @@ class Robot:
 
     async def set_dce_gain(self, node: int, kind: str, value: int) -> P.Response:
         """``#SET_DCE_K{P,V,I,D} <node> <value>`` — node 1..6, value uint32."""
-        if not (1 <= int(node) <= 6):
-            raise RobotError(f"set_dce_gain: node must be 1..6, got {node}", P.ErrorCategory.BAD_ARGS)
+        if not (1 <= int(node) <= 7):
+            raise RobotError(f"set_dce_gain: node must be 1..7, got {node}", P.ErrorCategory.BAD_ARGS)
         k = kind.strip().lower()
         if k not in self._DCE_KINDS:
             raise RobotError(f"set_dce_gain: kind must be kp/kv/ki/kd, got {kind!r}", P.ErrorCategory.BAD_ARGS)
         v = int(value)
-        if v < 0:
+        if not 0 <= v <= 2147483647:
             raise RobotError(f"set_dce_gain: value must be >= 0, got {value}", P.ErrorCategory.BAD_ARGS)
         cmd = f"#SET_DCE_{self._DCE_KINDS[k]} {int(node)} {v}"
         return await self._exec(cmd)
 
+    async def set_pid(self, node: int, values: dict[str, int]) -> P.Response:
+        """设置单节点的单个或全部 PIDV，参数顺序为 KP、KI、KD、KV。"""
+        if not 1 <= node <= 7 or not values or any(k not in self._DCE_KINDS for k in values):
+            raise RobotError("PIDV 节点或参数无效", P.ErrorCategory.BAD_ARGS)
+        if any(type(v) is not int or not 0 <= v <= 2147483647 for v in values.values()):
+            raise RobotError("PIDV 参数必须为非负的 32 位有符号整数", P.ErrorCategory.BAD_ARGS)
+        if len(values) == 1:
+            kind, value = next(iter(values.items()))
+            cmd = f"#SETPID {node} {kind} {value}"
+        elif set(values) == set(self._DCE_KINDS):
+            cmd = f"#SETPID {node} " + " ".join(str(values[k]) for k in ("kp", "ki", "kd", "kv"))
+        else:
+            raise RobotError("请提供单个参数或全部四个参数", P.ErrorCategory.BAD_ARGS)
+        return await self._exec(cmd, timeout=12)
+
     async def get_dce(self, node: Optional[int] = None,
                       param: Optional[str] = None,
                       quiet_ms: int = 400,
-                      total_timeout: float = 6.0) -> dict:
+                      total_timeout: float = 6.0, pid: bool = False) -> dict:
         """``#GET_DCE [node [param]]`` — query PID gains.
 
         Firmware emits unstructured multi-line output without an "OK" tag
@@ -546,7 +675,9 @@ class Robot:
         if param is not None and param.strip().lower() not in self._DCE_KINDS:
             raise RobotError(f"get_dce: param must be kp/kv/ki/kd, got {param!r}", P.ErrorCategory.BAD_ARGS)
 
-        cmd = "#GET_DCE"
+        if param is not None and node is None:
+            raise RobotError("单参数查询需要指定节点", P.ErrorCategory.BAD_ARGS)
+        cmd = "#GETPID" if pid else "#GET_DCE"
         if node is not None:
             cmd += f" {int(node)}"
             if param is not None:
@@ -554,7 +685,7 @@ class Robot:
 
         # Start trigger: either an error line or the first "J<n>  OL|NL:" header
         def is_start(ln: str) -> bool:
-            if ln.startswith("GetDce Error"):
+            if ln.startswith(("GetDce Error", "GetPid Error")):
                 return True
             return bool(re.match(r"J\d+\s+(OL|NL):", ln))
 
@@ -563,7 +694,7 @@ class Robot:
 
         # Error path
         for ln in lines:
-            if ln.startswith("GetDce Error"):
+            if ln.startswith(("GetDce Error", "GetPid Error")):
                 raise RobotError(ln)
 
         # Parse interleaved pairs: "J<n>  OL|NL:" then a payload line

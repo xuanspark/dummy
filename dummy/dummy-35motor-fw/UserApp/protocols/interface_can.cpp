@@ -250,6 +250,12 @@ void OnCanCmd(uint8_t _cmd, uint8_t* _data, uint32_t _len)
         }
             break;
 
+        case 0x2b:
+            // 仅在主循环完成 EEPROM 写入后确认落盘。
+            _data[0] = boardConfig.configStatus == CONFIG_OK ? 1 : 0;
+            txHeader.StdId = (boardConfig.canNodeId << 7) | 0x2b;
+            CAN_Send(&txHeader, _data);
+            break;
         case 0x27: // Get DCE Kp
         {
             auto* b = (unsigned char*) &boardConfig.dce_kp;

@@ -196,6 +196,14 @@ void eeprom_buffer_fill(void)
     memcpy(eeprom_buffer, (uint8_t*) (FLASH_BASE_ADDRESS), E2END + 1);
 }
 
+// 直接核对 Flash，避免把 RAM 缓冲中的新值误当成已经落盘。
+uint8_t eeprom_buffer_matches_flash(void)
+{
+    const volatile uint8_t* stored = reinterpret_cast<const volatile uint8_t*>(FLASH_BASE_ADDRESS);
+    for (uint32_t i = 0; i <= E2END; ++i) if (stored[i] != eeprom_buffer[i]) return 0;
+    return 1;
+}
+
 #if defined(EEPROM_RETRAM_MODE)
 
 /**

@@ -184,9 +184,11 @@ class TestHand:
         r, t = robot_pair
         t.on("!HD_EN",  lambda _l: ["HD_EN OK enabled=1 angle=0.00"])
         t.on("!HD_DIS", lambda _l: ["HD_DIS OK enabled=0 angle=0.00"])
-        await r.hand_enable(True)
-        await r.hand_enable(False)
-        assert t.tx_log == ["!HD_EN", "!HD_DIS"]
+        for enabled in (True, False):
+            with pytest.raises(RobotError) as error:
+                await r.hand_enable(enabled)
+            assert error.value.category == P.ErrorCategory.STATE_BLOCKED
+        assert t.tx_log == []
 
     async def test_pos(self, robot_pair):
         r, t = robot_pair
@@ -484,8 +486,8 @@ class TestTuningSet:
 
     async def test_set_dce_gain_bad_node(self, robot_pair):
         r, t = robot_pair
-        with pytest.raises(RobotError, match="node must be 1..6"):
-            await r.set_dce_gain(node=7, kind="kp", value=10)
+        with pytest.raises(RobotError, match="node must be 1..7"):
+            await r.set_dce_gain(node=8, kind="kp", value=10)
         assert t.tx_log == []
 
     async def test_set_dce_gain_bad_kind(self, robot_pair):

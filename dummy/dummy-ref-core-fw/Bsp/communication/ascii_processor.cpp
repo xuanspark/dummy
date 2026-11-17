@@ -26,6 +26,40 @@
 #define MAX_LINE_LENGTH 256
 #define TO_STR_INNER(s) #s
 #define TO_STR(s) TO_STR_INNER(s)
+
+bool EmergencyStopScanner::Feed(const uint8_t* data, size_t length)
+{
+    bool stopped = false;
+    for (size_t i = 0; i < length; ++i) {
+        char c = static_cast<char>(data[i]);
+        if (c == 0) overflow = true;
+        if (c == '\r' || c == '\n') {
+            while (used && (line[used - 1] == ' ' || line[used - 1] == '\t')) --used;
+            line[used] = 0;
+            const char* command = line;
+            bool valid = !overflow;
+            if (line[0] == 'T' && line[1] == ':') {
+                const char* number = line + 2;
+                uint32_t request = 0;
+                int digits = 0;
+                while (*number >= '0' && *number <= '9' && digits < 10) {
+                    uint32_t digit = *number++ - '0';
+                    if (request > (2147483647u - digit) / 10) valid = false;
+                    request = request * 10 + digit;
+                    ++digits;
+                }
+                valid = valid && digits && request && *number == ' ';
+                command = *number == ' ' ? number + 1 : number;
+            }
+            if (valid && !strcmp(command, "!STOP")) stopped = true;
+            used = 0;
+            overflow = false;
+        } else if (used < sizeof(line) - 1) {
+            line[used++] = c >= 'a' && c <= 'z' ? c - 'a' + 'A' : c;
+        } else overflow = true;
+    }
+    return stopped;
+}
 /* Private variables ---------------------------------------------------------*/
 /* Private function prototypes -----------------------------------------------*/
 /* Function implementations --------------------------------------------------*/
@@ -55,9 +89,19 @@ void ASCII_protocol_process_line(const uint8_t* buffer, size_t len, StreamSink &
 
 void ASCII_protocol_parse_stream(const uint8_t* buffer, size_t len, StreamSink &response_channel)
 {
-    static uint8_t parse_buffer[MAX_LINE_LENGTH];
-    static bool read_active = true;
-    static uint32_t parse_buffer_idx = 0;
+    // 每个物理通道独立组行，避免 USB 与 UART 的分包相互拼接。
+    struct ParserState {
+        uint8_t buffer[MAX_LINE_LENGTH];
+        bool active = true;
+        uint32_t index = 0;
+    };
+    static ParserState parsers[3];
+    unsigned index = response_channel.channelType == StreamSink::CHANNEL_TYPE_USB ? 0 :
+        response_channel.channelType == StreamSink::CHANNEL_TYPE_UART4 ? 1 : 2;
+    auto& parser = parsers[index];
+    auto& parse_buffer = parser.buffer;
+    auto& read_active = parser.active;
+    auto& parse_buffer_idx = parser.index;
 
     while (len--)
     {
@@ -73,7 +117,7 @@ void ASCII_protocol_parse_stream(const uint8_t* buffer, size_t len, StreamSink &
         bool is_end_of_line = (c == '\r' || c == '\n');
         if (is_end_of_line)
         {
-            if (read_active)
+            if (read_active && parse_buffer_idx != 0)
                 ASCII_protocol_process_line(parse_buffer, parse_buffer_idx, response_channel);
             parse_buffer_idx = 0;
             read_active = true;

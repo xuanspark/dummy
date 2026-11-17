@@ -12,17 +12,7 @@ osThreadId_t usbServerTaskHandle;
 USBStats_t usb_stats_ = {0};
 
 // 在 USB ISR 上下文扫描数据包中是否包含指定报文
-static inline bool peek_token(const uint8_t* buf, size_t len, const char* tok)
-{
-    size_t tl = std::strlen(tok);
-    if (len < tl) return false;
-    for (size_t i = 0; i + tl <= len; i++)
-    {
-        if (std::memcmp(buf + i, tok, tl) == 0)
-            return true;
-    }
-    return false;
-}
+static EmergencyStopScanner usbStopScanner;
 
 class USBSender : public PacketSink
 {
@@ -52,7 +42,8 @@ public:
         }
 
         // 发送包
-        uint8_t status = CDC_Transmit_FS(const_cast<uint8_t *>(buffer), length, endpoint_pair_);
+        std::memcpy(tx_buffer_, buffer, length);
+        uint8_t status = CDC_Transmit_FS(tx_buffer_, length, endpoint_pair_);
         if (status != USBD_OK)
         {
             osSemaphoreRelease(sem_usb_tx_);
@@ -66,6 +57,7 @@ public:
 private:
     uint8_t endpoint_pair_;
     const osSemaphoreId &sem_usb_tx_;
+    uint8_t tx_buffer_[USB_TX_DATA_SIZE];
 };
 
 // 注意：这里可以为两个发送器使用独立信号量以允许并发发送，当前共用一个
@@ -86,7 +78,7 @@ public:
         while (length)
         {
             size_t chunk = length < USB_TX_DATA_SIZE ? length : USB_TX_DATA_SIZE;
-            if (output_.process_packet(buffer, length) != 0)
+            if (output_.process_packet(buffer, chunk) != 0)
                 return -1;
             buffer += chunk;
             length -= chunk;
@@ -205,8 +197,8 @@ void usb_rx_process_packet(uint8_t *buf, uint32_t len, uint8_t endpoint_pair)
     // !PAUSE 是软暂停语义，不在 ISR 处理——交给 OnUsbAsciiCmd 在当前动作完成后切状态。
     if (endpoint_pair == CDC_interface.out_ep && len > 0)
     {
-        if (peek_token(buf, len, "!STOP"))
-            dummy.robotState = DummyRobot::STATE_EMERGENCY_STOP;
+        if (usbStopScanner.Feed(buf, len))
+            dummy.RequestEmergencyStop();
     }
 
     // 在上一个包被处理完之前，下一个 USB 包不会进入。

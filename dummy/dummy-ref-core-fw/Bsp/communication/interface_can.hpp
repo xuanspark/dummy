@@ -56,7 +56,7 @@ bool StartCanServer(CAN_TypeDef* hcan);
 
 // 标准 8 字节 CAN 帧发送。带 100 ms 信号量超时，超时静默放弃。
 // txHeader.StdId 由调用方设好，本函数仅负责 TX 邮箱占用与超时管理。
-void CanSendMessage(CAN_context* canCtx, uint8_t* txData, CAN_TxHeaderTypeDef* txHeader);
+bool CanSendMessage(CAN_context* canCtx, uint8_t* txData, CAN_TxHeaderTypeDef* txHeader);
 
 // CAN RX 顶层回调入口：communication 层将 HAL 中断结果转交此处，
 // 实现见 UserApp/protocols/can_protocol.cpp，按 StdId 分发到具体节点。

@@ -1,421 +1,120 @@
-// ============================================================================
-//  ctrl_step.cpp —— CAN 步进电机节点封装实现
-// ----------------------------------------------------------------------------
-//  - 将关节角度、速度、电流、DCE 参数等高级操作编码为 CAN 命令
-//  - 维护节点在线状态、实时反馈角度和运动完成标志
-//  - 作为 ref 主控与 35/42 电机子板之间的唯一执行器抽象
-// ============================================================================
-
 #include "ctrl_step.hpp"
 #include "communication.hpp"
+#include <cstring>
+#include <cmath>
 
+CtrlStepMotor::CtrlStepMotor(CAN_HandleTypeDef* bus, uint8_t id, bool inverse,
+                             float ratio, float minimum, float maximum) :
+    nodeID(id), angleLimitMax(maximum), angleLimitMin(minimum),
+    inverseDirection(inverse), reduction(ratio), hcan(bus) {}
 
-CtrlStepMotor::CtrlStepMotor(CAN_HandleTypeDef* _hcan, uint8_t _id, bool _inverse,
-                             float _reduction, float _angleLimitMin, float _angleLimitMax) :
-    nodeID(_id), hcan(_hcan), inverseDirection(_inverse), reduction(_reduction),
-    angleLimitMin(_angleLimitMin), angleLimitMax(_angleLimitMax)
+// 每次发送使用栈上报文，避免控制、查询和急停线程覆盖同一个缓冲。
+bool CtrlStepMotor::Send(uint8_t command, const void* value, uint8_t save)
 {
-    txHeader =
-        {
-            .StdId = 0,
-            .ExtId = 0,
-            .IDE = CAN_ID_STD,
-            .RTR = CAN_RTR_DATA,
-            .DLC = 8,
-            .TransmitGlobalTime = DISABLE
-        };
+    uint8_t data[8] = {};
+    if (value) std::memcpy(data, value, 4);
+    data[4] = save;
+    CAN_TxHeaderTypeDef header = {};
+    header.StdId = (nodeID << 7) | command;
+    header.IDE = CAN_ID_STD;
+    header.RTR = CAN_RTR_DATA;
+    header.DLC = 8;
+    return CanSendMessage(get_can_ctx(hcan), data, &header);
 }
 
-
-void CtrlStepMotor::SetEnable(bool _enable)
+bool CtrlStepMotor::SetEnable(bool enabled)
 {
-    state = _enable ? FINISH : STOP;
+    uint32_t value = enabled ? 1 : 0;
+    if (!Send(0x01, &value)) return false;
+    state = enabled ? FINISH : STOP;
+    return true;
+}
+void CtrlStepMotor::SetEnableTemp(bool enabled) { uint32_t v = enabled; Send(0x7d, &v); }
+void CtrlStepMotor::DoCalibration() { Send(0x02); }
+void CtrlStepMotor::SetCurrentSetPoint(float v) { state = RUNNING; Send(0x03, &v); }
+void CtrlStepMotor::SetVelocitySetPoint(float v) { state = RUNNING; Send(0x04, &v); }
+void CtrlStepMotor::SetPositionSetPoint(float v) { Send(0x05, &v, 1); }
+void CtrlStepMotor::SetPositionWithVelocityLimit(float position, float velocity)
+{
+    uint8_t data[8];
+    std::memcpy(data, &position, 4);
+    std::memcpy(data + 4, &velocity, 4);
+    CAN_TxHeaderTypeDef header = {};
+    header.StdId = (nodeID << 7) | 0x07;
+    header.IDE = CAN_ID_STD;
+    header.RTR = CAN_RTR_DATA;
+    header.DLC = 8;
+    CanSendMessage(get_can_ctx(hcan), data, &header);
+}
+void CtrlStepMotor::SetNodeID(uint32_t v) { Send(0x11, &v, 1); }
+void CtrlStepMotor::SetCurrentLimit(float v) { Send(0x12, &v, 1); }
+void CtrlStepMotor::SetVelocityLimit(float v) { Send(0x13, &v, 1); }
+void CtrlStepMotor::SetAcceleration(float v) { Send(0x14, &v); }
+bool CtrlStepMotor::ApplyPositionAsHome() { return Send(0x15); }
+void CtrlStepMotor::SetEnableOnBoot(bool enabled) { uint32_t v = enabled; Send(0x16, &v, 1); }
+void CtrlStepMotor::SetDceKp(int32_t v) { Send(0x17, &v, 1); }
+void CtrlStepMotor::SetDceKv(int32_t v) { Send(0x18, &v, 1); }
+void CtrlStepMotor::SetDceKi(int32_t v) { Send(0x19, &v, 1); }
+void CtrlStepMotor::SetDceKd(int32_t v) { Send(0x1a, &v, 1); }
+void CtrlStepMotor::SetEnableStallProtect(bool enabled) { uint32_t v = enabled; Send(0x1b, &v, 1); }
+void CtrlStepMotor::Reboot() { Send(0x7f); }
+uint32_t CtrlStepMotor::GetTemp() { Send(0x25); return temperature; }
+void CtrlStepMotor::EraseConfigs() { Send(0x7e); }
 
-    uint8_t mode = 0x01;
-    txHeader.StdId = nodeID << 7 | mode;
-
-    // Int to Bytes
-    uint32_t val = _enable ? 1 : 0;
-    auto* b = (unsigned char*) &val;
-    for (int i = 0; i < 4; i++)
-        canBuf[i] = *(b + i);
-
-    CanSendMessage(get_can_ctx(hcan), canBuf, &txHeader);
+void CtrlStepMotor::SetAngle(float value)
+{
+    SetPositionSetPoint((inverseDirection ? -value : value) / 360.0f * reduction);
+}
+void CtrlStepMotor::SetAngleWithVelocityLimit(float value, float velocity)
+{
+    SetPositionWithVelocityLimit((inverseDirection ? -value : value) / 360.0f * reduction, velocity);
+}
+void CtrlStepMotor::UpdateAngle() { Send(0x23); }
+void CtrlStepMotor::UpdateAngleCallback(float position, bool finished, bool stalled)
+{
+    if (!std::isfinite(position)) return;
+    angle = position / reduction * 360.0f * (inverseDirection ? -1 : 1);
+    state = finished ? FINISH : RUNNING;
+    isStalled = stalled;
+    lastAngleTick = HAL_GetTick();
+    ++angleSequence;
 }
 
-void CtrlStepMotor::SetEnableTemp(bool _enable)
-{
-    uint8_t mode = 0x7d;
-    txHeader.StdId = nodeID << 7 | mode;
-
-    // Int to Bytes
-    uint32_t val = _enable ? 1 : 0;
-    auto* b = (unsigned char*) &val;
-    for (int i = 0; i < 4; i++)
-        canBuf[i] = *(b + i);
-
-    CanSendMessage(get_can_ctx(hcan), canBuf, &txHeader);
-}
-
-void CtrlStepMotor::DoCalibration()
-{
-    uint8_t mode = 0x02;
-    txHeader.StdId = nodeID << 7 | mode;
-
-    CanSendMessage(get_can_ctx(hcan), canBuf, &txHeader);
-}
-
-
-void CtrlStepMotor::SetCurrentSetPoint(float _val)
-{
-    state = RUNNING;
-
-    uint8_t mode = 0x03;
-    txHeader.StdId = nodeID << 7 | mode;
-
-    // Float to Bytes
-    auto* b = (unsigned char*) &_val;
-    for (int i = 0; i < 4; i++)
-        canBuf[i] = *(b + i);
-
-    CanSendMessage(get_can_ctx(hcan), canBuf, &txHeader);
-}
-
-
-void CtrlStepMotor::SetVelocitySetPoint(float _val)
-{
-    state = RUNNING;
-
-    uint8_t mode = 0x04;
-    txHeader.StdId = nodeID << 7 | mode;
-
-    // Float to Bytes
-    auto* b = (unsigned char*) &_val;
-    for (int i = 0; i < 4; i++)
-        canBuf[i] = *(b + i);
-
-    CanSendMessage(get_can_ctx(hcan), canBuf, &txHeader);
-}
-
-
-void CtrlStepMotor::SetPositionSetPoint(float _val)
-{
-    uint8_t mode = 0x05;
-    txHeader.StdId = nodeID << 7 | mode;
-
-    // Float to Bytes
-    auto* b = (unsigned char*) &_val;
-    for (int i = 0; i < 4; i++)
-        canBuf[i] = *(b + i);
-    canBuf[4] = 1; // Need ACK
-
-    CanSendMessage(get_can_ctx(hcan), canBuf, &txHeader);
-}
-
-
-void CtrlStepMotor::SetPositionWithVelocityLimit(float _pos, float _vel)
-{
-    uint8_t mode = 0x07;
-    txHeader.StdId = nodeID << 7 | mode;
-
-    // Float to Bytes
-    auto* b = (unsigned char*) &_pos;
-    for (int i = 0; i < 4; i++)
-        canBuf[i] = *(b + i);
-    b = (unsigned char*) &_vel;
-    for (int i = 4; i < 8; i++)
-        canBuf[i] = *(b + i - 4);
-
-    CanSendMessage(get_can_ctx(hcan), canBuf, &txHeader);
-}
-
-
-void CtrlStepMotor::SetNodeID(uint32_t _id)
-{
-    uint8_t mode = 0x11;
-    txHeader.StdId = nodeID << 7 | mode;
-
-    // Int to Bytes
-    auto* b = (unsigned char*) &_id;
-    for (int i = 0; i < 4; i++)
-        canBuf[i] = *(b + i);
-    canBuf[4] = 1; // Need save to EEPROM or not
-
-    CanSendMessage(get_can_ctx(hcan), canBuf, &txHeader);
-}
-
-
-void CtrlStepMotor::SetCurrentLimit(float _val)
-{
-    uint8_t mode = 0x12;
-    txHeader.StdId = nodeID << 7 | mode;
-
-    // Float to Bytes
-    auto* b = (unsigned char*) &_val;
-    for (int i = 0; i < 4; i++)
-        canBuf[i] = *(b + i);
-    canBuf[4] = 1; // Need save to EEPROM or not
-
-    CanSendMessage(get_can_ctx(hcan), canBuf, &txHeader);
-}
-
-
-void CtrlStepMotor::SetVelocityLimit(float _val)
-{
-    uint8_t mode = 0x13;
-    txHeader.StdId = nodeID << 7 | mode;
-
-    // Float to Bytes
-    auto* b = (unsigned char*) &_val;
-    for (int i = 0; i < 4; i++)
-        canBuf[i] = *(b + i);
-    canBuf[4] = 1; // Need save to EEPROM or not
-
-    CanSendMessage(get_can_ctx(hcan), canBuf, &txHeader);
-}
-
-
-void CtrlStepMotor::SetAcceleration(float _val)
-{
-    uint8_t mode = 0x14;
-    txHeader.StdId = nodeID << 7 | mode;
-
-    // Float to Bytes
-    auto* b = (unsigned char*) &_val;
-    for (int i = 0; i < 4; i++)
-        canBuf[i] = *(b + i);
-    canBuf[4] = 0; // Need save to EEPROM or not
-
-    CanSendMessage(get_can_ctx(hcan), canBuf, &txHeader);
-}
-
-
-void CtrlStepMotor::ApplyPositionAsHome()
-{
-    uint8_t mode = 0x15;
-    txHeader.StdId = nodeID << 7 | mode;
-
-    CanSendMessage(get_can_ctx(hcan), canBuf, &txHeader);
-}
-
-
-void CtrlStepMotor::SetEnableOnBoot(bool _enable)
-{
-    uint8_t mode = 0x16;
-    txHeader.StdId = nodeID << 7 | mode;
-
-    // Int to Bytes
-    uint32_t val = _enable ? 1 : 0;
-    auto* b = (unsigned char*) &val;
-    for (int i = 0; i < 4; i++)
-        canBuf[i] = *(b + i);
-    canBuf[4] = 1; // Need save to EEPROM or not
-
-    CanSendMessage(get_can_ctx(hcan), canBuf, &txHeader);
-}
-
-
-void CtrlStepMotor::SetEnableStallProtect(bool _enable)
-{
-    uint8_t mode = 0x1B;
-    txHeader.StdId = nodeID << 7 | mode;
-
-    uint32_t val = _enable ? 1 : 0;
-    auto* b = (unsigned char*) &val;
-    for (int i = 0; i < 4; i++)
-        canBuf[i] = *(b + i);
-    canBuf[4] = 1; // Need save to EEPROM or not
-
-    CanSendMessage(get_can_ctx(hcan), canBuf, &txHeader);
-}
-
-
-void CtrlStepMotor::Reboot()
-{
-    uint8_t mode = 0x7f;
-    txHeader.StdId = nodeID << 7 | mode;
-
-    CanSendMessage(get_can_ctx(hcan), canBuf, &txHeader);
-}
-
-uint32_t CtrlStepMotor::GetTemp()
-{
-    uint8_t mode = 0x25;
-    txHeader.StdId = nodeID << 7 | mode;
-
-    CanSendMessage(get_can_ctx(hcan), canBuf, &txHeader);
-    return temperature;
-}
-
-void CtrlStepMotor::EraseConfigs()
-{
-    uint8_t mode = 0x7e;
-    txHeader.StdId = nodeID << 7 | mode;
-
-    CanSendMessage(get_can_ctx(hcan), canBuf, &txHeader);
-}
-
-
-void CtrlStepMotor::SetAngle(float _angle)
-{
-    _angle = inverseDirection ? -_angle : _angle;
-    float stepMotorCnt = _angle / 360.0f * (float) reduction;
-    SetPositionSetPoint(stepMotorCnt);
-}
-
-
-void CtrlStepMotor::SetAngleWithVelocityLimit(float _angle, float _vel)
-{
-    _angle = inverseDirection ? -_angle : _angle;
-    float stepMotorCnt = _angle / 360.0f * (float) reduction;
-    SetPositionWithVelocityLimit(stepMotorCnt, _vel);
-}
-
-
-void CtrlStepMotor::UpdateAngle()
-{
-    uint8_t mode = 0x23;
-    txHeader.StdId = nodeID << 7 | mode;
-
-    // 清空 canBuf，避免前序命令（如 SetPositionWithVelocityLimit）写入的字节
-    // 透传到子板。35hand 固件用 _data[5]/[6] 携带 isStalled/state，必须保证查询帧
-    // 这些位置发出时为 0。
-    for (int i = 0; i < 8; i++) canBuf[i] = 0;
-
-    CanSendMessage(get_can_ctx(hcan), canBuf, &txHeader);
-}
-
-
-void CtrlStepMotor::UpdateAngleCallback(float _pos, bool _isFinished, bool _isStalled)
-{
-    state = _isFinished ? FINISH : RUNNING;
-    isStalled = _isStalled;
-
-    float tmp = _pos / (float) reduction * 360;
-    angle = inverseDirection ? -tmp : tmp;
-}
-
-
-void CtrlStepMotor::SetDceKp(int32_t _val)
-{
-    uint8_t mode = 0x17;
-    txHeader.StdId = nodeID << 7 | mode;
-
-    auto* b = (unsigned char*) &_val;
-    for (int i = 0; i < 4; i++)
-        canBuf[i] = *(b + i);
-    canBuf[4] = 1; // Need save to EEPROM or not
-
-    CanSendMessage(get_can_ctx(hcan), canBuf, &txHeader);
-}
-
-
-void CtrlStepMotor::SetDceKv(int32_t _val)
-{
-    uint8_t mode = 0x18;
-    txHeader.StdId = nodeID << 7 | mode;
-
-    auto* b = (unsigned char*) &_val;
-    for (int i = 0; i < 4; i++)
-        canBuf[i] = *(b + i);
-    canBuf[4] = 1; // Need save to EEPROM or not
-
-    CanSendMessage(get_can_ctx(hcan), canBuf, &txHeader);
-}
-
-
-void CtrlStepMotor::SetDceKi(int32_t _val)
-{
-    uint8_t mode = 0x19;
-    txHeader.StdId = nodeID << 7 | mode;
-
-    auto* b = (unsigned char*) &_val;
-    for (int i = 0; i < 4; i++)
-        canBuf[i] = *(b + i);
-    canBuf[4] = 1; // Need save to EEPROM or not
-
-    CanSendMessage(get_can_ctx(hcan), canBuf, &txHeader);
-}
-
-
-void CtrlStepMotor::SetDceKd(int32_t _val)
-{
-    uint8_t mode = 0x1A;
-    txHeader.StdId = nodeID << 7 | mode;
-
-    auto* b = (unsigned char*) &_val;
-    for (int i = 0; i < 4; i++)
-        canBuf[i] = *(b + i);
-    canBuf[4] = 1; // Need save to EEPROM or not
-
-    CanSendMessage(get_can_ctx(hcan), canBuf, &txHeader);
-}
-
-
-// ==================== DCE 参数实时查询 ====================
-
-void CtrlStepMotor::QueryDceKp()
-{
-    txHeader.StdId = nodeID << 7 | 0x27;
-    CanSendMessage(get_can_ctx(hcan), canBuf, &txHeader);
-}
-
-void CtrlStepMotor::QueryDceKv()
-{
-    txHeader.StdId = nodeID << 7 | 0x28;
-    CanSendMessage(get_can_ctx(hcan), canBuf, &txHeader);
-}
-
-void CtrlStepMotor::QueryDceKi()
-{
-    txHeader.StdId = nodeID << 7 | 0x29;
-    CanSendMessage(get_can_ctx(hcan), canBuf, &txHeader);
-}
-
-void CtrlStepMotor::QueryDceKd()
-{
-    txHeader.StdId = nodeID << 7 | 0x2A;
-    CanSendMessage(get_can_ctx(hcan), canBuf, &txHeader);
-}
-
+void CtrlStepMotor::QueryDceKp() { dceReceivedMask &= ~1u; dceQueryDone = false; Send(0x27); }
+void CtrlStepMotor::QueryDceKv() { dceReceivedMask &= ~2u; dceQueryDone = false; Send(0x28); }
+void CtrlStepMotor::QueryDceKi() { dceReceivedMask &= ~4u; dceQueryDone = false; Send(0x29); }
+void CtrlStepMotor::QueryDceKd() { dceReceivedMask &= ~8u; dceQueryDone = false; Send(0x2a); }
 void CtrlStepMotor::QueryDceAll()
 {
+    dceReceivedMask = 0;
     dceQueryDone = false;
-    QueryDceKp();
-    QueryDceKv();
-    QueryDceKi();
-    QueryDceKd();
+    Send(0x27);
+    Send(0x28);
+    Send(0x29);
+    Send(0x2a);
 }
-
-void CtrlStepMotor::DceParamCallback(uint8_t paramId, int32_t value)
+void CtrlStepMotor::DceParamCallback(uint8_t parameter, int32_t value)
 {
-    switch (paramId)
-    {
-        case 0x27: dceKp = value; break;
-        case 0x28: dceKv = value; break;
-        case 0x29: dceKi = value; break;
-        case 0x2A: dceKd = value; break;
-        default: break;
+    switch (parameter) {
+        case 0x27: dceKp = value; dceReceivedMask |= 1; break;
+        case 0x28: dceKv = value; dceReceivedMask |= 2; break;
+        case 0x29: dceKi = value; dceReceivedMask |= 4; break;
+        case 0x2a: dceKd = value; dceReceivedMask |= 8; break;
+        default: return;
     }
     dceQueryDone = true;
-    // 同时标记在线
-    isOnline = true;
-    lastResponseTick = HAL_GetTick();
+    OnlineCallback();
 }
-
-
-// ==================== 在线检测 ====================
-
-void CtrlStepMotor::QueryOnline()
+void CtrlStepMotor::QueryConfigSaved()
 {
-    // 复用 0x23 位置查询作为探测帧，电机端一定会响应
-    isOnline = false;
-    txHeader.StdId = nodeID << 7 | 0x23;
-    CanSendMessage(get_can_ctx(hcan), canBuf, &txHeader);
+    configQueryDone = false;
+    Send(0x2b);
 }
-
-void CtrlStepMotor::OnlineCallback()
+void CtrlStepMotor::ConfigSavedCallback(bool saved)
 {
-    isOnline = true;
-    lastResponseTick = HAL_GetTick();
+    configSaved = saved;
+    configQueryDone = true;
+    OnlineCallback();
 }
+void CtrlStepMotor::QueryOnline() { isOnline = false; UpdateAngle(); }
+void CtrlStepMotor::OnlineCallback() { isOnline = true; lastResponseTick = HAL_GetTick(); }

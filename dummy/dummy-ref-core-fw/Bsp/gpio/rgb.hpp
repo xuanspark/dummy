@@ -27,7 +27,7 @@ private:
     uint16_t  breathStep = 0;         // 呼吸灯独立计步（与 effStep 分离，避免互相干扰）
     uint16_t  flashStep = 0;          // 急停快闪/慢闪独立计步
 public:
-    uint8_t  data_sentflag = 0;       // DMA 完成中断置 1，主循环轮询等待发送结束
+    volatile uint8_t data_sentflag = 0;  // DMA 回调与刷新线程共享
 
     // ────────── 灯光模式编号（持久化到 EEPROM）──────────
     //  0  = 关闭
@@ -156,12 +156,19 @@ public:
             indx++;
         }
 
+        data_sentflag = 0;
         ret = HAL_TIM_PWM_Start_DMA(&htim2, TIM_CHANNEL_4, pwmData, indx);
         if (ret != HAL_OK) {
             data_sentflag = 0;
             return;
         }
-        while (!data_sentflag){};
+        uint32_t started = HAL_GetTick();
+        while (!data_sentflag) {
+            if (HAL_GetTick() - started >= 5) {
+                HAL_TIM_PWM_Stop_DMA(&htim2, TIM_CHANNEL_4);
+                return;
+            }
+        }
         data_sentflag = 0;
     }
 

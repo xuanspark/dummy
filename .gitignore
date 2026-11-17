@@ -1,6 +1,8 @@
 # ===== 编译输出 / 构建产物 =====
 build/
 cmake-build-*/
+build-control-*/
+dist-control-*/
 dist/
 
 # ===== 编译生成文件（嵌入式固件） =====

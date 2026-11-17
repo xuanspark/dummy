@@ -22,6 +22,7 @@ Error vocabulary (T12 — canonical reasons emitted by firmware):
 from __future__ import annotations
 
 import re
+import math
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
@@ -97,6 +98,7 @@ class Response:
 
 def parse_response(line: str) -> Optional[Response]:
     """Classify one RX line. Returns None for unparseable / log lines."""
+    _, line = unwrap_response(line)
     line = line.strip()
     if not line:
         return None
@@ -111,6 +113,23 @@ def parse_response(line: str) -> Optional[Response]:
             error_category=classify_error(reason),
         )
     return None  # unstructured log / banner
+
+
+def unwrap_response(line: str) -> tuple[Optional[int], str]:
+    """拆出固件事务编号，兼容不带编号的串口调试响应。"""
+    match = re.match(r"^R:(\d+)\s+(.*)$", line.strip())
+    return (int(match[1]), match[2]) if match else (None, line.strip())
+
+
+def normalize_command(command: str) -> str:
+    """只接受单行指令，规范命令名，不更改参数。"""
+    command = command.strip()
+    if not command or any(ord(c) < 32 and c != "\t" for c in command) or not command.isascii():
+        raise ValueError("指令必须为非空的单行 ASCII 文本")
+    if len(command) >= 128:
+        raise ValueError("指令长度必须小于 128 字节")
+    parts = command.split(maxsplit=1)
+    return parts[0].upper() + (" " + parts[1] if len(parts) == 2 else "")
 
 
 # ---------- joint / pose payload parsing ----------
@@ -189,6 +208,8 @@ def cmd_move_j(j: list[float], speed: Optional[float] = None) -> str:
     """
     if len(j) != 6:
         raise ValueError("move_j requires 6 joint values")
+    if not all(math.isfinite(x) for x in j) or (speed is not None and (not math.isfinite(speed) or not 0 < speed <= 100)):
+        raise ValueError("关节位置必须为有限数，速度必须在 (0, 100] 内")
     body = "&" + ",".join(f"{x:.3f}" for x in j)
     return body if speed is None else f"{body},{speed:g}"
 
@@ -197,6 +218,8 @@ def cmd_move_l(pose: list[float], speed: Optional[float] = None) -> str:
     """Build a MoveL wire command. Like :func:`cmd_move_j`, ``speed`` is optional."""
     if len(pose) != 6:
         raise ValueError("move_l requires 6 pose values")
+    if not all(math.isfinite(x) for x in pose) or (speed is not None and (not math.isfinite(speed) or not 0 < speed <= 100)):
+        raise ValueError("目标位置必须为有限数，速度必须在 (0, 100] 内")
     body = "@" + ",".join(f"{x:.3f}" for x in pose)
     return body if speed is None else f"{body},{speed:g}"
 
@@ -247,6 +270,10 @@ COMMAND_TAGS: dict[str, str] = {
     "#GETSPEED":      "GetSpeed",
     "#ONLINE":        "Online",
     "#GET_DCE":       "GetDce",
+    "#SETPID":        "SetPid",
+    "SETPID":         "SetPid",
+    "#GETPID":        "GetPid",
+    "GETPID":         "GetPid",
     "#STATUS":        "Status",      # T10 — diagnostic summary (multi-line)
     "#SET_DCE_KP":    "SetDceKp",
     "#SET_DCE_KV":    "SetDceKv",

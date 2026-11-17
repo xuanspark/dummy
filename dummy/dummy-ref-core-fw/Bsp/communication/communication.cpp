@@ -80,17 +80,14 @@ void CommunicationTask(void* ctx)
     CommitProtocol();
 
     // 让 InitCommunication 插点可以返回、主初始化继续
-    endpointListValid = true;
 
     StartUartServer();
     StartUsbServer();
     StartCanServer(CAN1);
     StartCanServer(CAN2);
-
-    for (;;)
-    {
-        osDelay(1000); // 本线程仅作为中转，不需要主动处理会话
-    }
+    endpointListValid = true;
+    // 发布结束后释放大栈，避免常驻占用 45KB 导致动作或 RGB 任务创建失败。
+    osThreadExit();
 }
 
 // newlib 的低层写接口。printf / puts / std::cout 最终都会调下面的 _write。

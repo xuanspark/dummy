@@ -18,7 +18,7 @@ const NODES: Array<{ id: number; label: string }> = [
   { id: 4, label: 'J4' },
   { id: 5, label: 'J5' },
   { id: 6, label: 'J6' },
-  { id: 7, label: 'HAND' },
+  { id: 7, label: '手爪' },
 ]
 
 function statusOf(id: number): 'online' | 'offline' | 'unknown' {
@@ -39,7 +39,7 @@ const summaryColor = computed(() => {
 
 async function runOnlineAll() {
   if (!store.isConnected) {
-    ElMessage.warning('Not connected')
+    ElMessage.warning('设备未连接')
     return
   }
   onlineBusy.value = true
@@ -96,16 +96,16 @@ const rebootBusy = ref(false)
 
 async function runReboot() {
   if (!store.isConnected) {
-    ElMessage.warning('Not connected')
+    ElMessage.warning('设备未连接')
     return
   }
   const opt = REBOOT_OPTIONS.find((o) => o.value === rebootTarget.value)
   const label = opt?.label ?? `node=${rebootTarget.value}`
   try {
     await ElMessageBox.confirm(
-      `Really reboot: ${label}?` + (opt?.danger ? '\n\n⚠ 会触发主控系统复位，当前串口会断开。' : ''),
-      'Confirm Reboot',
-      { confirmButtonText: 'Reboot', cancelButtonText: 'Cancel', type: 'warning' },
+      `确认重启 ${label}？` + (opt?.danger ? '\n\n会触发主控系统复位，当前串口会断开。' : ''),
+      '确认重启',
+      { confirmButtonText: '重启', cancelButtonText: '取消', type: 'warning' },
     )
   } catch { return }
 
@@ -115,7 +115,7 @@ async function runReboot() {
     store.pushLog(`→ ${cmdStr}`, 'tx')
     const res = await api.reboot(rebootTarget.value)
     store.pushLog(`← ${res.raw}`, res.ok ? 'ok' : 'err')
-    if (res.ok) ElMessage.success('Reboot command sent')
+    if (res.ok) ElMessage.success('已发送重启指令')
   } catch (e) {
     store.pushLog(`← ERROR: ${(e as Error).message}`, 'err')
     ElMessage.error((e as Error).message)
@@ -131,10 +131,10 @@ const cmdModeBusy = ref(false)
 
 // Firmware commandMode numeric values (see DummyRobot::CommandMode / main.cpp OLED)
 const CMD_MODES: Array<{ value: number; label: string }> = [
-  { value: 1, label: '1 — SEQ  (Target Point Sequential)' },
-  { value: 2, label: '2 — INT  (Target Point Interruptable)' },
-  { value: 3, label: '3 — TRJ  (Continuous Trajectory)' },
-  { value: 4, label: '4 — TUN  (Motor Tuning)' },
+  { value: 1, label: '1：顺序模式' },
+  { value: 2, label: '2：默认队列模式' },
+  { value: 3, label: '3：轨迹参数模式' },
+  { value: 4, label: '4：电机调试模式' },
 ]
 const cmdMode = ref<number>(2)
 
@@ -146,18 +146,18 @@ const OFFSET_TARGETS: Array<{ value: number | 'all'; label: string; danger?: boo
   { value: 4,     label: 'J4' },
   { value: 5,     label: 'J5' },
   { value: 6,     label: 'J6' },
-  { value: 7,     label: 'HAND' },
-  { value: 'all', label: 'ALL (全部 + 系统复位)', danger: true },
+  { value: 7,     label: '手爪' },
+  { value: 'all', label: '全部节点（写入后重启）', danger: true },
 ]
 const offsetTarget = ref<number | 'all'>(1)
 
 async function runCalibrate() {
-  if (!store.isConnected) { ElMessage.warning('Not connected'); return }
+  if (!store.isConnected) { ElMessage.warning('设备未连接'); return }
   try {
     await ElMessageBox.confirm(
-      '执行零点校准 (!CALIBRATION)？\n\n此操作将由固件驱动全部关节进行小幅标定动作；过程最多约 30 秒。',
-      'Confirm Calibration',
-      { confirmButtonText: 'Run', cancelButtonText: 'Cancel', type: 'warning' },
+      '请先将全部关节人工对齐到 HOME 工作姿态。标定会记录该姿态，再运动到零点姿态并写入偏移；全过程保持使能，支持急停和恢复。确认开始？',
+      '确认标定',
+      { confirmButtonText: '开始', cancelButtonText: '取消', type: 'warning' },
     )
   } catch { return }
   calibBusy.value = true
@@ -165,7 +165,7 @@ async function runCalibrate() {
     store.pushLog('→ !CALIBRATION', 'tx')
     await api.calibrate()
     store.pushLog('← Calibration OK', 'ok')
-    ElMessage.success('Calibration done')
+    ElMessage.success('标定完成')
   } catch (e) {
     store.pushLog(`← ERROR: ${(e as Error).message}`, 'err')
     ElMessage.error((e as Error).message)
@@ -175,7 +175,7 @@ async function runCalibrate() {
 }
 
 async function runOffsetJ() {
-  if (!store.isConnected) { ElMessage.warning('Not connected'); return }
+  if (!store.isConnected) { ElMessage.warning('设备未连接'); return }
   const opt = OFFSET_TARGETS.find((o) => o.value === offsetTarget.value)
   const label = opt?.label ?? String(offsetTarget.value)
   try {
@@ -183,11 +183,11 @@ async function runOffsetJ() {
       `⚠ 危险操作：#OFFSET_J ${offsetTarget.value}\n\n` +
       '将当前关节位置写入 NVS 作为新的零点。写入是持久化的，重启后生效。\n' +
       (opt?.danger
-        ? '\n"ALL" 变体会在写入后立即触发 HAL_NVIC_SystemReset()，串口会断开。'
+        ? '\n全部节点保存校验通过后自动重启，串口会断开；写入失败或急停时不会继续重启。'
         : '\n单节点写入不会触发系统复位。') +
       `\n\n确定对 ${label} 执行？`,
-      'Confirm NVS Write',
-      { confirmButtonText: 'Write NVS', cancelButtonText: 'Cancel', type: 'error' },
+      '确认写入偏移',
+      { confirmButtonText: '写入', cancelButtonText: '取消', type: 'error' },
     )
   } catch { return }
   offsetBusy.value = true
@@ -196,7 +196,7 @@ async function runOffsetJ() {
     store.pushLog(`→ ${cmdStr}`, 'tx')
     const res = await api.offsetJ(offsetTarget.value)
     store.pushLog(`← ${res.raw}`, res.ok ? 'ok' : 'err')
-    if (res.ok) ElMessage.success('Offset written')
+    if (res.ok) ElMessage.success('偏移写入完成')
   } catch (e) {
     store.pushLog(`← ERROR: ${(e as Error).message}`, 'err')
     ElMessage.error((e as Error).message)
@@ -206,13 +206,13 @@ async function runOffsetJ() {
 }
 
 async function runCmdMode() {
-  if (!store.isConnected) { ElMessage.warning('Not connected'); return }
+  if (!store.isConnected) { ElMessage.warning('设备未连接'); return }
   cmdModeBusy.value = true
   try {
     store.pushLog(`→ #CMDMODE ${cmdMode.value}`, 'tx')
     const res = await api.cmdMode(cmdMode.value)
     store.pushLog(`← ${res.raw}`, res.ok ? 'ok' : 'err')
-    if (res.ok) ElMessage.success(`Mode set: ${cmdMode.value}`)
+    if (res.ok) ElMessage.success(`已设置模式 ${cmdMode.value}`)
   } catch (e) {
     store.pushLog(`← ERROR: ${(e as Error).message}`, 'err')
     ElMessage.error((e as Error).message)
@@ -225,27 +225,27 @@ async function runCmdMode() {
 <template>
   <section class="card">
     <div class="header">
-      <h2>Diagnostics</h2>
+      <h2>设备诊断</h2>
       <span class="summary" :style="{ color: summaryColor }">
-        {{ lastResult?.summary ?? '— run a check —' }}
+        {{ lastResult?.summary ?? '尚未检测' }}
       </span>
     </div>
 
     <!-- Online check -->
     <div class="block">
-      <div class="block-title">Node Online Check (<code>#ONLINE</code>)</div>
+      <div class="block-title">节点在线检测（<code>#ONLINE</code>）</div>
       <div class="nodes-grid">
         <button
           v-for="n in NODES" :key="n.id"
           class="node-cell" :class="statusOf(n.id)"
           :disabled="!store.isConnected || onlineBusy"
-          :title="`Click to check ${n.label} only`"
+          :title="`检测 ${n.label}`"
           @click="runOnlineNode(n.id)"
         >
           <div class="node-label">{{ n.label }}</div>
           <div class="node-status">
-            <template v-if="statusOf(n.id) === 'online'">OL</template>
-            <template v-else-if="statusOf(n.id) === 'offline'">NL</template>
+            <template v-if="statusOf(n.id) === 'online'">在线</template>
+            <template v-else-if="statusOf(n.id) === 'offline'">离线</template>
             <template v-else>?</template>
           </div>
         </button>
@@ -255,13 +255,13 @@ async function runCmdMode() {
           type="primary" size="small"
           :loading="onlineBusy" :disabled="!store.isConnected"
           @click="runOnlineAll"
-        >Check All</el-button>
+        >检测全部节点</el-button>
       </div>
     </div>
 
     <!-- Reboot -->
     <div class="block">
-      <div class="block-title">Reboot Node (<code>#REBOOT</code>)</div>
+      <div class="block-title">重启节点（<code>#REBOOT</code>）</div>
       <div class="reboot-row">
         <el-select v-model="rebootTarget" size="small" style="flex:1">
           <el-option
@@ -273,32 +273,32 @@ async function runCmdMode() {
           type="danger" size="small"
           :loading="rebootBusy" :disabled="!store.isConnected"
           @click="runReboot"
-        >Reboot</el-button>
+        >重启</el-button>
       </div>
     </div>
 
     <!-- ===== Maintenance / danger zone ===== -->
     <div class="block danger-zone">
-      <div class="block-title">⚠ Maintenance</div>
+      <div class="block-title">参数维护</div>
 
       <!-- Calibration -->
       <div class="maint-row">
         <div class="maint-label">
-          <div class="maint-name">Home Calibration</div>
-          <div class="maint-hint">Runs <code>!CALIBRATION</code>. Drives all joints through a short motion (~30s).</div>
+          <div class="maint-name">零点标定</div>
+          <div class="maint-hint">先人工对齐 HOME 工作姿态，再执行 <code>!CALIBRATION</code>；标定中会运动到零点姿态。</div>
         </div>
         <el-button
           type="warning" size="small"
           :loading="calibBusy" :disabled="!store.isConnected"
           @click="runCalibrate"
-        >Calibrate</el-button>
+        >开始标定</el-button>
       </div>
 
       <!-- Command mode -->
       <div class="maint-row">
         <div class="maint-label">
-          <div class="maint-name">Command Mode</div>
-          <div class="maint-hint"><code>#CMDMODE</code> — SEQ/INT/TRJ/TUN. TUN disables normal motion and enables motor tuning loop.</div>
+          <div class="maint-name">命令模式</div>
+          <div class="maint-hint"><code>#CMDMODE</code>：各模式均使用统一队列，支持急停、暂停和恢复。</div>
         </div>
         <el-select v-model="cmdMode" size="small" style="width: 240px">
           <el-option
@@ -310,13 +310,13 @@ async function runCmdMode() {
           size="small"
           :loading="cmdModeBusy" :disabled="!store.isConnected"
           @click="runCmdMode"
-        >Apply</el-button>
+        >应用</el-button>
       </div>
 
       <!-- Offset J (danger) -->
       <div class="maint-row danger-row">
         <div class="maint-label">
-          <div class="maint-name">Home Offset → NVS (<code>#OFFSET_J</code>)</div>
+          <div class="maint-name">写入零点偏移（<code>#OFFSET_J</code>）</div>
           <div class="maint-hint">⚠ 写入 NVS，持久化。先手动把关节摆到精确零位再写入。"ALL" 会触发系统复位。</div>
         </div>
         <el-select v-model="offsetTarget" size="small" style="width: 200px">
@@ -329,7 +329,7 @@ async function runCmdMode() {
           type="danger" size="small"
           :loading="offsetBusy" :disabled="!store.isConnected"
           @click="runOffsetJ"
-        >Write NVS</el-button>
+        >写入偏移</el-button>
       </div>
     </div>
   </section>

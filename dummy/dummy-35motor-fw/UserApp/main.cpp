@@ -13,6 +13,7 @@
 #include "configurations.h"
 #include "Platform/Utils/st_hardware.h"
 #include <tim.h>
+#include <cstring>
 
 
 /* 组件全局定义 ----------------------------------------------------- */
@@ -120,8 +121,17 @@ void Main()
         if (boardConfig.configStatus == CONFIG_COMMIT)
         {
             // 提交：将编辑后的配置制入 EEPROM
-            boardConfig.configStatus = CONFIG_OK;
-            eeprom.put(0, boardConfig);
+            auto savedConfig = boardConfig;
+            savedConfig.configStatus = CONFIG_OK;
+            eeprom.put(0, savedConfig);
+            bool persisted = eeprom_buffer_matches_flash();
+            uint32_t mask = __get_PRIMASK();
+            __disable_irq();
+            auto currentConfig = boardConfig;
+            currentConfig.configStatus = CONFIG_OK;
+            if (!std::memcmp(&currentConfig, &savedConfig, sizeof(savedConfig)))
+                boardConfig.configStatus = persisted ? CONFIG_OK : CONFIG_SAVE_FAILED;
+            __set_PRIMASK(mask);
         } else if (boardConfig.configStatus == CONFIG_RESTORE)
         {
             // 恢复：写回 EEPROM 后立即重启令配置生效

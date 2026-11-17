@@ -34,6 +34,15 @@ const sending = ref<boolean>(false)
 const THROTTLE_MS = 100
 let lastSent = 0
 let pending: ReturnType<typeof setTimeout> | null = null
+let resendRequested = false
+let disposed = false
+
+watch(() => store.robotState, (state) => {
+  if (state !== 'paused' && state !== 'estop') return
+  resendRequested = false
+  if (pending) clearTimeout(pending)
+  pending = null
+})
 
 // Auto-query: poll joint position from the backend.
 const POLL_MS = 250
@@ -55,6 +64,7 @@ watch(() => store.isConnected, (c) => {
 })
 
 onBeforeUnmount(() => {
+  disposed = true
   stopPolling()
   if (pending) clearTimeout(pending)
 })
@@ -129,6 +139,7 @@ function onSliderInput(idx: number, v: number) {
 }
 
 function scheduleSend() {
+  if (disposed || store.robotState === 'paused' || store.robotState === 'estop') return
   if (!store.isConnected && !store.dryRun) return
   const now = Date.now()
   const elapsed = now - lastSent
@@ -145,14 +156,23 @@ function scheduleSend() {
 }
 
 async function sendMove() {
-  if (sending.value) return
+  if (disposed || store.robotState === 'paused' || store.robotState === 'estop') return
+  if (sending.value) {
+    resendRequested = true
+    return
+  }
   sending.value = true
+  resendRequested = false
+  let succeeded = false
   try {
     await store.sendMoveJoint([...targets.value], overrideSpeed.value ? speed.value : undefined)
+    succeeded = true
   } catch {
     // already logged by store
   } finally {
     sending.value = false
+    // 当前运动结束后补发最后目标；停止或离开页面时清除尚未受理的本地目标。
+    if (succeeded && resendRequested && store.isConnected) scheduleSend()
   }
 }
 
@@ -161,7 +181,7 @@ async function onReset() {
   for (let i = 0; i < 6; i++) lastEmitted[i] = HOME[i]
   try {
     await store.sendMoveJoint([...HOME], overrideSpeed.value ? speed.value : undefined)
-    ElMessage.success(store.dryRun ? 'Reset (dry-run)' : 'Reset to HOME')
+    ElMessage.success(store.dryRun ? '模拟归位完成' : '已到达工作姿态')
   } catch (e) {
     ElMessage.error((e as Error).message)
   }
@@ -196,13 +216,13 @@ function fmtLp(v: number, u: string): string {
 <template>
   <section class="card">
     <div class="header">
-      <h2>Joint Control</h2>
+      <h2>关节控制</h2>
       <div class="header-right">
         <el-checkbox v-model="overrideSpeed"
-          title="Off → 6-arg wire form (&j1..j6) — firmware uses current speed">
-          Override
+          title="关闭后使用设备当前速度">
+          指定速度
         </el-checkbox>
-        <span class="label">Speed</span>
+        <span class="label">速度</span>
         <el-input-number
           v-model="speed"
           :min="1"
@@ -213,21 +233,21 @@ function fmtLp(v: number, u: string): string {
           controls-position="right"
           style="width: 100px"
         />
-        <el-checkbox v-model="autoQuery" :disabled="!store.isConnected || store.dryRun">Auto poll</el-checkbox>
-        <el-button size="small" @click="onReset" :disabled="!store.isConnected && !store.dryRun">Reset</el-button>
+        <el-checkbox v-model="autoQuery" :disabled="!store.isConnected || store.dryRun">自动查询</el-checkbox>
+        <el-button size="small" @click="onReset" :disabled="!store.isConnected && !store.dryRun">工作归位</el-button>
       </div>
     </div>
 
     <!-- Live cartesian pose strip (firmware #GETLPOS) -->
     <div class="lpos-strip" :class="{ stale: !lposDisplay }">
-      <span class="lpos-title">LPos:</span>
+      <span class="lpos-title">末端位置：</span>
       <template v-if="lposDisplay">
         <span v-for="it in lposDisplay" :key="it.k" class="lpos-item">
           <span class="lpos-k">{{ it.k }}</span>
           <b>{{ fmtLp(it.v, it.u) }}</b>
         </span>
       </template>
-      <span v-else class="lpos-empty">waiting for data…</span>
+      <span v-else class="lpos-empty">等待数据…</span>
     </div>
 
     <div v-for="(name, i) in NAMES" :key="name" class="joint-row">
@@ -245,7 +265,7 @@ function fmtLp(v: number, u: string): string {
         style="flex:1; margin: 0 12px"
       />
       <span class="joint-live" :class="{ stale: !live }">
-        live: <b>{{ fmt(live?.[i]) }}</b>
+        实际：<b>{{ fmt(live?.[i]) }}</b>
       </span>
     </div>
   </section>

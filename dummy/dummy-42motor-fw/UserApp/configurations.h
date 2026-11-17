@@ -20,7 +20,8 @@ typedef enum configStatus_t
 {
     CONFIG_RESTORE = 0,    // 需写回 EEPROM 后立即重启令生效
     CONFIG_OK,             // 正常运行、无待交下内容
-    CONFIG_COMMIT          // 已修改、需下一轮主循环提交
+    CONFIG_COMMIT,         // 已修改、需下一轮主循环提交
+    CONFIG_SAVE_FAILED     // 写入校验失败，等待新的参数写入后重试
 } configStatus_t;
 
 

@@ -11,23 +11,23 @@ const canOperate = computed(() => store.isConnected || store.dryRun)
 // state → badge colour + label
 const badge = computed(() => {
   switch (store.robotState) {
-    case 'normal':  return { label: 'NORMAL',  color: '#22c55e' }
-    case 'estop':   return { label: 'E-STOP',  color: '#ef4444' }
-    case 'paused':  return { label: 'PAUSED',  color: '#f59e0b' }
-    case 'stopped': return { label: 'STOPPED', color: '#64748b' }
-    default:        return { label: 'UNKNOWN', color: '#6b7280' }
+    case 'normal':  return { label: '正常', color: '#22c55e' }
+    case 'estop':   return { label: '急停', color: '#ef4444' }
+    case 'paused':  return { label: '暂停', color: '#f59e0b' }
+    case 'stopped': return { label: '已关闭', color: '#64748b' }
+    default:        return { label: '未知', color: '#6b7280' }
   }
 })
 
 async function run(key: string, cmd: string, opts: { confirm?: string } = {}) {
   if (!canOperate.value) {
-    ElMessage.warning('Not connected (or enable Dry-run in the header)')
+    ElMessage.warning('请连接设备或开启模拟运行')
     return
   }
   if (opts.confirm) {
     try {
-      await ElMessageBox.confirm(opts.confirm, 'Confirm', {
-        confirmButtonText: 'Yes', cancelButtonText: 'Cancel', type: 'warning',
+      await ElMessageBox.confirm(opts.confirm, '确认操作', {
+        confirmButtonText: '确认', cancelButtonText: '取消', type: 'warning',
       })
     } catch { return /* user cancelled */ }
   }
@@ -44,11 +44,11 @@ async function run(key: string, cmd: string, opts: { confirm?: string } = {}) {
 // E-STOP / PAUSE / RESUME live in the global header (reachable from every tab).
 // QuickCommands focuses on lifecycle actions for the Home page.
 const buttons: Array<{ key: string; label: string; cmd: string; type: string; confirm?: string }> = [
-  { key: 'start', label: 'START', cmd: '!START', type: 'success' },
-  { key: 'home',  label: 'HOME',  cmd: '!HOME',  type: 'primary' },
-  { key: 'reset', label: 'RESET', cmd: '!RESET', type: 'info' },
-  { key: 'close', label: 'CLOSE', cmd: '!CLOSE', type: 'info',
-    confirm: 'Disable motors and release the arm. Continue?' },
+  { key: 'start', label: '启动', cmd: '!START', type: 'success' },
+  { key: 'home', label: '工作归位', cmd: '!HOME', type: 'primary' },
+  { key: 'reset', label: '回零点姿态', cmd: '!RESET', type: 'info' },
+  { key: 'close', label: '回零后关闭', cmd: '!CLOSE', type: 'info',
+    confirm: '机械臂将先回零点姿态，完成后失能。确认关闭？' },
 ]
 
 function isDisabled(key: string): boolean {
@@ -70,8 +70,8 @@ function isDisabled(key: string): boolean {
       <span class="conn" v-if="store.connection.connected">
         {{ store.connection.port }} @ {{ store.connection.baud }}
       </span>
-      <span class="conn dim" v-else-if="store.dryRun">dry-run</span>
-      <span class="conn dim" v-else>no connection</span>
+      <span class="conn dim" v-else-if="store.dryRun">模拟运行</span>
+      <span class="conn dim" v-else>未连接</span>
     </div>
 
     <div class="buttons">

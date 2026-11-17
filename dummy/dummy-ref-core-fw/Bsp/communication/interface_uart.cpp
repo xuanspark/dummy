@@ -12,6 +12,8 @@
 #include "fibre/protocol.hpp"
 #include "usart.h"
 
+extern DummyRobot dummy;
+
 #define UART_TX_BUFFER_SIZE 64
 #define UART_RX_BUFFER_SIZE 64
 
@@ -19,6 +21,15 @@
 // 1ms delay periodic, chase DMA ptr around
 static uint8_t dma_rx_buffer[2][UART_RX_BUFFER_SIZE];
 static uint32_t dma_last_rcv_idx[2];
+static osMutexId_t txLocks[2];
+
+struct UartOutputGuard {
+    osMutexId_t mutex;
+    bool owned;
+    explicit UartOutputGuard(unsigned index) : mutex(txLocks[index]),
+        owned(mutex && osMutexAcquire(mutex, 100) == osOK) {}
+    ~UartOutputGuard() { if (owned) osMutexRelease(mutex); }
+};
 
 // FIXME: the stdlib doesn't know about CMSIS threads, so this is just a global variable
 // static thread_local uint32_t deadline_ms = 0;
@@ -36,6 +47,8 @@ public:
 
     int process_bytes(const uint8_t* buffer, size_t length, size_t* processed_bytes) override
     {
+        UartOutputGuard guard(0);
+        if (!guard.owned) return -1;
         // Loop to ensure all bytes get sent
         while (length)
         {
@@ -47,8 +60,10 @@ public:
                 return -1;
             // transmit chunk
             memcpy(tx_buf_, buffer, chunk);
-            if (HAL_UART_Transmit_DMA(&huart4, tx_buf_, chunk) != HAL_OK)
+            if (HAL_UART_Transmit_DMA(&huart4, tx_buf_, chunk) != HAL_OK) {
+                osSemaphoreRelease(sem_uart4_dma);
                 return -1;
+            }
             buffer += chunk;
             length -= chunk;
             if (processed_bytes)
@@ -74,6 +89,8 @@ public:
 
     int process_bytes(const uint8_t* buffer, size_t length, size_t* processed_bytes) override
     {
+        UartOutputGuard guard(1);
+        if (!guard.owned) return -1;
         // Loop to ensure all bytes get sent
         while (length)
         {
@@ -85,8 +102,10 @@ public:
                 return -1;
             // transmit chunk
             memcpy(tx_buf_, buffer, chunk);
-            if (HAL_UART_Transmit_DMA(&huart5, tx_buf_, chunk) != HAL_OK)
+            if (HAL_UART_Transmit_DMA(&huart5, tx_buf_, chunk) != HAL_OK) {
+                osSemaphoreRelease(sem_uart5_dma);
                 return -1;
+            }
             buffer += chunk;
             length -= chunk;
             if (processed_bytes)
@@ -111,6 +130,29 @@ StreamSink* uart5StreamOutputPtr = &uart5_stream_output;
 StreamBasedPacketSink uart5_packet_output(uart5_stream_output);
 BidirectionalPacketBasedChannel uart5_channel(uart5_packet_output);
 StreamToPacketSegmenter uart5_stream_input(uart5_channel);
+
+static void UartEmergencyTask(void*)
+{
+    uint32_t previous[2] = {0, 0};
+    EmergencyStopScanner scanners[2];
+    UART_HandleTypeDef* ports[2] = {&huart4, &huart5};
+    for (;;) {
+        for (unsigned n = 0; n < 2; ++n) {
+            uint32_t next = (UART_RX_BUFFER_SIZE - ports[n]->hdmarx->Instance->NDTR) % UART_RX_BUFFER_SIZE;
+            if (next < previous[n]) {
+                if (scanners[n].Feed(dma_rx_buffer[n] + previous[n], UART_RX_BUFFER_SIZE - previous[n]))
+                    dummy.RequestEmergencyStop();
+                previous[n] = 0;
+            }
+            if (next > previous[n]) {
+                if (scanners[n].Feed(dma_rx_buffer[n] + previous[n], next - previous[n]))
+                    dummy.RequestEmergencyStop();
+            }
+            previous[n] = next;
+        }
+        osDelay(1);
+    }
+}
 
 static void UartServerTask(void* ctx)
 {
@@ -162,7 +204,7 @@ static void UartServerTask(void* ctx)
         // Process bytes in one or two chunks (two in case there was a wrap)
         if (new_rcv_idx < dma_last_rcv_idx[1])
         {
-            uart4_stream_input.process_bytes(dma_rx_buffer[1] + dma_last_rcv_idx[1],
+            uart5_stream_input.process_bytes(dma_rx_buffer[1] + dma_last_rcv_idx[1],
                                              UART_RX_BUFFER_SIZE - dma_last_rcv_idx[1],
                                              nullptr); // TODO: use process_all
             ASCII_protocol_parse_stream(dma_rx_buffer[1] + dma_last_rcv_idx[1],
@@ -171,7 +213,7 @@ static void UartServerTask(void* ctx)
         }
         if (new_rcv_idx > dma_last_rcv_idx[1])
         {
-            uart4_stream_input.process_bytes(dma_rx_buffer[1] + dma_last_rcv_idx[1],
+            uart5_stream_input.process_bytes(dma_rx_buffer[1] + dma_last_rcv_idx[1],
                                              new_rcv_idx - dma_last_rcv_idx[1],
                                              nullptr); // TODO: use process_all
             ASCII_protocol_parse_stream(dma_rx_buffer[1] + dma_last_rcv_idx[1],
@@ -192,6 +234,9 @@ const osThreadAttr_t uartServerTask_attributes = {
 
 void StartUartServer()
 {
+    const osMutexAttr_t lockAttributes = { .name = "UartOutput", .attr_bits = osMutexPrioInherit };
+    txLocks[0] = osMutexNew(&lockAttributes);
+    txLocks[1] = osMutexNew(&lockAttributes);
     // DMA is set up to receive in a circular buffer forever.
     // We don't use interrupts to fetch the data, instead we periodically read
     // data out of the circular buffer into a parse buffer, controlled by a state machine
@@ -203,6 +248,10 @@ void StartUartServer()
 
     // Start UART communication thread
     uartServerTaskHandle = osThreadNew(UartServerTask, nullptr, &uartServerTask_attributes);
+    const osThreadAttr_t emergencyAttributes = {
+        .name = "UartEmergencyTask", .stack_size = 1024, .priority = osPriorityRealtime6,
+    };
+    osThreadNew(UartEmergencyTask, nullptr, &emergencyAttributes);
 }
 
 void HAL_UART_TxCpltCallback(UART_HandleTypeDef* huart)

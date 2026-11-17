@@ -46,6 +46,9 @@ void OnCanMessage(CAN_context* canCtx, CAN_RxHeaderTypeDef* rxHeader, uint8_t* d
                 return;  // 手爪未初始化，丢弃
             switch (cmd)
             {
+                case 0x2b:
+                    dummy.hand2->ConfigSavedCallback(data[0] != 0);
+                    break;
                 case 0x23:
                     // 35hand 在 data[5] 填 isStalled；老 35motor 该字节恒为 0，向后兼容
                     dummy.hand2->UpdateAngleCallback(*(float*) (data), data[4], data[5]);
@@ -71,6 +74,9 @@ void OnCanMessage(CAN_context* canCtx, CAN_RxHeaderTypeDef* rxHeader, uint8_t* d
         /*----------------------- ↓ Add Your CAN1 Packet Protocol Here ↓ ------------------------*/
         switch (cmd)
         {
+            case 0x2b:
+                dummy.motorJ[id]->ConfigSavedCallback(data[0] != 0);
+                break;
             case 0x23:
                 dummy.motorJ[id]->UpdateAngleCallback(*(float*) (data), data[4]);
                 dummy.motorJ[id]->OnlineCallback();

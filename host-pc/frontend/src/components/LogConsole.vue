@@ -54,7 +54,7 @@ async function submit() {
   const cmd = input.value.trim()
   if (!cmd) return
   if (!store.isConnected && !store.dryRun) {
-    ElMessage.warning('Not connected (or enable Dry-run in the header)')
+    ElMessage.warning('请连接设备或开启模拟运行')
     return
   }
   try {
@@ -78,7 +78,7 @@ function fmt(t: number): string {
 <template>
   <section class="card console" :class="{ reversed }">
     <div class="header">
-      <h2>Console</h2>
+      <h2>控制日志</h2>
       <span v-if="hiddenNoiseCount > 0" class="hidden-pill" :title="`已隐藏 ${hiddenNoiseCount} 条 ESP32 启动调试信息`">
         +{{ hiddenNoiseCount }} 隐藏
       </span>
@@ -94,7 +94,7 @@ function fmt(t: number): string {
           <span style="margin-left: 4px;">{{ reversed ? '倒序' : '正序' }}</span>
         </el-button>
       </el-tooltip>
-      <el-button size="small" @click="clear">Clear</el-button>
+      <el-button size="small" @click="clear">清空</el-button>
     </div>
 
     <div ref="boxRef" class="log-box">
@@ -107,11 +107,11 @@ function fmt(t: number): string {
     <div class="input-row">
       <el-input
         v-model="input"
-        placeholder="Type a raw command (e.g. !HOME, &0,0,90,0,0,0,10) and press Enter"
+        placeholder="输入指令后按回车，例如 !HOME 或 &0,0,90,0,0,0,10"
         :disabled="!store.isConnected && !store.dryRun"
         @keyup.enter="submit"
       />
-      <el-button type="primary" :disabled="!store.isConnected && !store.dryRun" @click="submit">Send</el-button>
+      <el-button type="primary" :disabled="!store.isConnected && !store.dryRun" @click="submit">发送</el-button>
     </div>
   </section>
 </template>

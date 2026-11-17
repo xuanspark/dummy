@@ -53,6 +53,7 @@ void OnCanCmd(uint8_t _cmd, uint8_t* _data, uint32_t _len)
             encoderCalibrator.isTriggered = true;
             break;
         case 0x03:  // 设电流设点（float, A）
+            motor.controller->ClearStallFlag();
             if (motor.controller->modeRunning != Motor::MODE_COMMAND_CURRENT)
                 motor.controller->SetCtrlMode(Motor::MODE_COMMAND_CURRENT);
             motor.controller->SetCurrentSetPoint((int32_t) (*(float*) RxData * 1000));
@@ -292,6 +293,12 @@ void OnCanCmd(uint8_t _cmd, uint8_t* _data, uint32_t _len)
         }
             break;
 
+        case 0x2b:
+            // 仅在主循环完成 EEPROM 写入后确认落盘。
+            _data[0] = boardConfig.configStatus == CONFIG_OK ? 1 : 0;
+            txHeader.StdId = (boardConfig.canNodeId << 7) | 0x2b;
+            CAN_Send(&txHeader, _data);
+            break;
         case 0x27: // 读 DCE Kp
         {
             auto* b = (unsigned char*) &boardConfig.dce_kp;

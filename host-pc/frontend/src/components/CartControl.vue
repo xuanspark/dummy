@@ -35,6 +35,16 @@ const sending = ref<boolean>(false)
 const THROTTLE_MS = 120
 let lastSent = 0
 let pending: ReturnType<typeof setTimeout> | null = null
+let resendRequested = false
+let disposed = false
+let polling = false
+
+watch(() => store.robotState, (state) => {
+  if (state !== 'paused' && state !== 'estop') return
+  resendRequested = false
+  if (pending) clearTimeout(pending)
+  pending = null
+})
 
 const POLL_MS = 300
 let pollTimer: ReturnType<typeof setInterval> | null = null
@@ -45,6 +55,7 @@ watch(() => store.isConnected, (c) => {
   else   { stopPolling() }
 })
 onBeforeUnmount(() => {
+  disposed = true
   stopPolling()
   if (pending) clearTimeout(pending)
 })
@@ -53,11 +64,13 @@ function startPolling() {
   stopPolling()
   if (!store.isConnected) return
   pollTimer = setInterval(async () => {
-    if (!store.isConnected || sending.value || store.dryRun) return
+    if (!store.isConnected || sending.value || store.dryRun || polling) return
+    polling = true
     try {
       const lp = await api.getLpos()
       store.$patch({ lpos: lp })
-    } catch { /* ignore transient */ }
+    } catch { /* 忽略暂时的查询失败。 */ }
+    finally { polling = false }
   }, POLL_MS)
 }
 function stopPolling() {
@@ -80,7 +93,8 @@ function fmtVal(v: number): string {
 }
 
 async function sendMove() {
-  if (sending.value) return
+  if (disposed || store.robotState === 'paused' || store.robotState === 'estop') return
+  if (sending.value) { resendRequested = true; return }
   const pose = [...targets.value]
   const body = '@' + pose.map(fmtVal).join(',')
   const cmd = overrideSpeed.value ? `${body},${speed.value}` : body
@@ -89,18 +103,23 @@ async function sendMove() {
     return
   }
   sending.value = true
+  resendRequested = false
+  let succeeded = false
   store.pushLog(`→ ${cmd}`, 'tx')
   try {
     await api.moveCart(pose, overrideSpeed.value ? speed.value : undefined)
+    succeeded = true
   } catch (e) {
-    store.pushLog(`MoveL failed: ${(e as Error).message}`, 'err')
+    store.pushLog(`末端运动失败：${(e as Error).message}`, 'err')
     ElMessage.error((e as Error).message)
   } finally {
     sending.value = false
+    if (succeeded && resendRequested && store.isConnected) scheduleSend()
   }
 }
 
 function scheduleSend() {
+  if (disposed || store.robotState === 'paused' || store.robotState === 'estop') return
   if (!store.isConnected && !store.dryRun) return
   const now = Date.now()
   const elapsed = now - lastSent
@@ -128,17 +147,17 @@ function onSliderInput(idx: number, v: number) {
 async function onSync() {
   // Copy current live pose into targets
   if (!store.lpos) {
-    ElMessage.info('No live pose yet — wait for auto-poll')
+    ElMessage.info('尚无位置数据，请等待自动查询')
     return
   }
   const p = store.lpos
   targets.value = [p.x, p.y, p.z, p.a, p.b, p.c].map((v) => Math.round(v))
-  ElMessage.success('Targets synced to live pose')
+  ElMessage.success('目标已同步为实际姿态')
 }
 
 async function onGoTarget() {
   if (!store.isConnected && !store.dryRun) {
-    ElMessage.warning('Not connected (or enable Dry-run)')
+    ElMessage.warning('请连接设备或开启模拟运行')
     return
   }
   await sendMove()
@@ -148,22 +167,22 @@ async function onGoTarget() {
 <template>
   <section class="card">
     <div class="header">
-      <h2>Cartesian Control (MoveL)</h2>
+      <h2>笛卡尔控制（MoveL）</h2>
       <div class="header-right">
         <el-checkbox v-model="overrideSpeed"
-          title="Off → 6-arg wire form (@x,y,z,a,b,c) — firmware uses current speed">
-          Override
+          title="关闭后使用设备当前速度">
+          指定速度
         </el-checkbox>
-        <span class="label">Speed</span>
+        <span class="label">速度</span>
         <el-input-number
-          v-model="speed" :min="1" :max="200" :step="1"
+          v-model="speed" :min="1" :max="100" :step="1"
           :disabled="!overrideSpeed"
           size="small" controls-position="right" style="width: 100px"
         />
-        <el-checkbox v-model="autoQuery" :disabled="!store.isConnected || store.dryRun">Auto poll</el-checkbox>
-        <el-button size="small" @click="onSync" :disabled="!store.lpos">Sync</el-button>
+        <el-checkbox v-model="autoQuery" :disabled="!store.isConnected || store.dryRun">自动查询</el-checkbox>
+        <el-button size="small" @click="onSync" :disabled="!store.lpos">同步位置</el-button>
         <el-button size="small" type="primary" @click="onGoTarget"
-                   :disabled="!store.isConnected && !store.dryRun">Go</el-button>
+                   :disabled="!store.isConnected && !store.dryRun">执行</el-button>
       </div>
     </div>
 
@@ -178,7 +197,7 @@ async function onGoTarget() {
         style="flex:1; margin: 0 12px"
       />
       <span class="axis-live" :class="{ stale: !live }">
-        live: <b>{{ fmtLive(live?.[i], ax.unit) }}</b>
+        实际：<b>{{ fmtLive(live?.[i], ax.unit) }}</b>
       </span>
     </div>
   </section>

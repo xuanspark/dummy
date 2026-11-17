@@ -1,0 +1,5 @@
+.rgb-panel { display: flex; flex-direction: column; gap: 0.75rem; }
+.row { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.mode-select { flex: 1; min-width: 180px; }
+p { color: #94a3b8; font-size: 0.85rem; line-height: 1.7; margin: 0; }
+input[type='color'] { width: 36px; height: 30px; background: transparent; border: none; }

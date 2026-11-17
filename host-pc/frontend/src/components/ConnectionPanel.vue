@@ -39,13 +39,13 @@ async function refresh() {
 
 async function onConnect() {
   if (!selectedPort.value) {
-    ElMessage.warning('Pick a port first')
+    ElMessage.warning('请先选择串口')
     return
   }
   busy.value = true
   try {
     await store.connect(selectedPort.value, baud.value)
-    ElMessage.success(`Connected to ${selectedPort.value}`)
+    ElMessage.success(`已连接 ${selectedPort.value}`)
   } catch (e) {
     ElMessage.error((e as Error).message)
   } finally {
@@ -57,7 +57,7 @@ async function onDisconnect() {
   busy.value = true
   try {
     await store.disconnect()
-    ElMessage.success('Disconnected')
+    ElMessage.success('已断开连接')
   } catch (e) {
     ElMessage.error((e as Error).message)
   } finally {
@@ -66,14 +66,14 @@ async function onDisconnect() {
 }
 
 const statusLabel = computed(() =>
-  store.isConnected ? `Connected: ${store.connection.port} @ ${store.connection.baud}` : 'Disconnected',
+  store.isConnected ? `已连接：${store.connection.port} @ ${store.connection.baud}` : '未连接',
 )
 </script>
 
 <template>
   <section class="card">
     <div class="title-row">
-      <h2>Connection</h2>
+      <h2>设备连接</h2>
       <span class="dot" :class="{ on: store.isConnected }"></span>
       <span class="status-text">{{ statusLabel }}</span>
     </div>
@@ -81,7 +81,7 @@ const statusLabel = computed(() =>
     <div class="inline-row">
       <el-select
         v-model="selectedPort"
-        placeholder="Port"
+        placeholder="选择串口"
         :disabled="store.isConnected || busy"
         style="flex: 1 1 auto; min-width: 110px;"
       >
@@ -92,7 +92,7 @@ const statusLabel = computed(() =>
           :value="p.device"
         >
           <span>{{ p.device }}</span>
-          <span class="port-tag" v-if="p.is_likely_robot">likely</span>
+          <span class="port-tag" v-if="p.is_likely_robot">可能为机械臂</span>
           <span class="port-desc">{{ p.description }}</span>
         </el-option>
       </el-select>
@@ -107,7 +107,7 @@ const statusLabel = computed(() =>
       />
 
       <el-button :loading="busy" @click="refresh" :disabled="store.isConnected">
-        Refresh
+        刷新
       </el-button>
       <el-button
         type="primary"
@@ -115,7 +115,7 @@ const statusLabel = computed(() =>
         :disabled="store.isConnected || !selectedPort"
         @click="onConnect"
       >
-        Connect
+        连接
       </el-button>
       <el-button
         type="danger"
@@ -123,7 +123,7 @@ const statusLabel = computed(() =>
         :disabled="!store.isConnected"
         @click="onDisconnect"
       >
-        Disconnect
+        断开
       </el-button>
     </div>
   </section>

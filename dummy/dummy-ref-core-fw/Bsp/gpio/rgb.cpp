@@ -16,6 +16,13 @@ RGB::RGB(uint8_t m) {
 //   - 100+ = 内部子效果（兼容直接传 _AUTO_xxx 的旧调用路径）
 // ---------------------------------------------------------------------------
 void RGB::Run(RGB::Rgb_style_t mode) {
+    static int previousMode = -1;
+    static int previousState = -1;
+    if (previousMode != mode || previousState != autoSubState) {
+        ResetEffectSteps();
+        previousMode = mode;
+        previousState = autoSubState;
+    }
     switch (mode) {
         // 0 = 关闭
         case MODE_OFF:

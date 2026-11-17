@@ -73,7 +73,7 @@ def _resolve_frontend_dist() -> Path | None:
     return None
 
 
-app = FastAPI(title="Dummy Robot Backend", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="Dummy Robot Backend", version="0.2.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],

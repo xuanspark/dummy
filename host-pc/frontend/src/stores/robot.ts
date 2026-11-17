@@ -26,6 +26,12 @@ export const useRobotStore = defineStore('robot', () => {
   const robotState = ref<'unknown' | 'normal' | 'estop' | 'paused' | 'stopped'>('unknown')
   let logId = 0
 
+  function applyMotionState(state: string) {
+    if (state === 'EMERGENCY_STOP') robotState.value = 'estop'
+    else if (state === 'PAUSED') robotState.value = 'paused'
+    else if (state === 'NORMAL') robotState.value = 'normal'
+  }
+
   function setDryRun(v: boolean) {
     dryRun.value = v
     localStorage.setItem(DRY_RUN_KEY, v ? '1' : '0')
@@ -35,6 +41,7 @@ export const useRobotStore = defineStore('robot', () => {
   const ws = new RobotWs()
   ws.on((msg: WsMessage) => {
     if (msg.type === 'state') {
+      if (msg.motion_state) applyMotionState(msg.motion_state)
       if (msg.jpos !== undefined) jpos.value = msg.jpos
       if (msg.lpos !== undefined) lpos.value = msg.lpos
       if (msg.speed !== undefined) speed.value = msg.speed
@@ -49,7 +56,7 @@ export const useRobotStore = defineStore('robot', () => {
     } else if (msg.type === 'log') {
       pushLog(msg.line, 'rx', msg.noise === true)
       // Derive lifecycle state from specific log prefixes
-      const l = msg.line
+      const l = msg.line.replace(/^R:\d+\s+/, '')
       if (/^(Start|Started) OK/.test(l)) robotState.value = 'normal'
       else if (/^(Home|Homed) OK/.test(l)) robotState.value = 'normal'
       else if (/^Reset OK/.test(l)) robotState.value = 'normal'
@@ -57,6 +64,8 @@ export const useRobotStore = defineStore('robot', () => {
       else if (/^Close OK/.test(l)) robotState.value = 'stopped'
       else if (/^Stop OK/.test(l) || /^Estop/.test(l) || /^ESTOP\|/.test(l)) robotState.value = 'estop'
       else if (/^Pause OK/.test(l) || /^PAUSED\|/.test(l)) robotState.value = 'paused'
+      const state = l.match(/\bSTATE[:=](NORMAL|PAUSED|EMERGENCY_STOP)\b/i)
+      if (state && !/^Close OK/.test(l)) applyMotionState(state[1].toUpperCase())
     } else if (msg.type === 'response') {
       // parsed response already in log line; nothing to do unless we want colour
     } else if (msg.type === 'error') {
@@ -115,6 +124,16 @@ export const useRobotStore = defineStore('robot', () => {
 
   async function sendRaw(cmd: string) {
     if (dryRun.value) {
+      const token = cmd.trim().toUpperCase()
+      if (robotState.value === 'estop' && token === '!PAUSE') {
+        pushLog('暂停指令：当前处于急停状态', 'rx')
+        return { ok: true, tag: 'Pause', rest: 'STATE:EMERGENCY_STOP', error: '', raw: 'Pause OK STATE:EMERGENCY_STOP' }
+      }
+      const query = /^#(GET|STATUS|ONLINE)/.test(token) || token.startsWith('GETPID')
+      if (['estop', 'paused'].includes(robotState.value) && !query && !['!STOP', '!RESUME', '!PAUSE'].includes(token)) {
+        pushLog(`拒绝指令：当前状态为 ${robotState.value}`, 'err')
+        throw new Error('当前处于急停或暂停状态，请先恢复')
+      }
       pushLog(`→ ${cmd}    [dry-run]`, 'tx')
       const ack = simulateAck(cmd)
       if (ack) {
@@ -174,6 +193,6 @@ export const useRobotStore = defineStore('robot', () => {
     isConnected,
     refreshPorts, refreshConnection, loadDefaults,
     connect, disconnect, sendRaw, sendMoveJoint,
-    setDryRun, pushLog,
+    setDryRun, pushLog, applyMotionState,
   }
 })
