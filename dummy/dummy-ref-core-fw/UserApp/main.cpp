@@ -96,8 +96,11 @@ void ThreadOledUpdate(void* argument)
         oled.setCursor(0, 10);
         oled.printf("IMU:%.3f/%.3f", mpu6050.data.ax, mpu6050.data.ay);
         oled.setCursor(85, 10);
-        oled.printf("| FPS:%lu", 1000000 / (micros() - t));
-        t = micros();
+        const uint32_t now = micros();
+        const uint32_t elapsed = now - t;
+        const uint32_t fps = (elapsed == 0U) ? 0U : (1000000U / elapsed);
+        oled.printf("| FPS:%lu", (unsigned long) fps);
+        t = now;
 
         oled.drawBox(0, 15, 128, 3);
         oled.setCursor(0, 30);
