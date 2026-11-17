@@ -124,7 +124,7 @@ function onSliderInput(idx: number, v: number) {
     for (let cur = prev + dir; (dir > 0 ? cur <= target : cur >= target); cur += dir) {
       next[idx] = cur
       const cmd = '&' + next.map(fmtVal).join(',') + speedSuffix
-      store.pushLog(`→ ${cmd}    [dry-run]`, 'tx')
+      store.pushLog(`→ ${cmd}    [模拟运行]`, 'tx')
     }
   } else {
     // Real mode: only the final target matters; throttle will collapse anyway.

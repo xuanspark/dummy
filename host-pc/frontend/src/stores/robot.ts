@@ -26,6 +26,33 @@ export const useRobotStore = defineStore('robot', () => {
   const robotState = ref<'unknown' | 'normal' | 'estop' | 'paused' | 'stopped'>('unknown')
   let logId = 0
 
+  function stateLabel(state: string): string {
+    switch (state) {
+      case 'normal': return '正常'
+      case 'estop': return '急停'
+      case 'paused': return '暂停'
+      case 'stopped': return '已关闭'
+      default: return '未知'
+    }
+  }
+
+  function localizeFirmwareLine(line: string): string {
+    return line
+      .replace(/^Start OK/, '启动完成')
+      .replace(/^Started OK/, '启动完成')
+      .replace(/^Home OK/, '归位完成')
+      .replace(/^Homed OK/, '归位完成')
+      .replace(/^Reset OK/, '复位完成')
+      .replace(/^Resume OK/, '恢复完成')
+      .replace(/^Resumed/, '已恢复')
+      .replace(/^Close OK/, '关闭完成')
+      .replace(/^Stop OK/, '急停完成')
+      .replace(/^Pause OK/, '暂停完成')
+      .replace(/STATE:EMERGENCY_STOP/g, '状态：急停')
+      .replace(/STATE:PAUSED/g, '状态：暂停')
+      .replace(/STATE:NORMAL/g, '状态：正常')
+  }
+
   function applyMotionState(state: string) {
     if (state === 'EMERGENCY_STOP') robotState.value = 'estop'
     else if (state === 'PAUSED') robotState.value = 'paused'
@@ -52,9 +79,9 @@ export const useRobotStore = defineStore('robot', () => {
           baud: msg.baud ?? connection.value.baud,
         }
       }
-      if (msg.message) pushLog(msg.message, 'info')
+      if (msg.message) pushLog(localizeFirmwareLine(msg.message), 'info')
     } else if (msg.type === 'log') {
-      pushLog(msg.line, 'rx', msg.noise === true)
+      pushLog(localizeFirmwareLine(msg.line), 'rx', msg.noise === true)
       // Derive lifecycle state from specific log prefixes
       const l = msg.line.replace(/^R:\d+\s+/, '')
       if (/^(Start|Started) OK/.test(l)) robotState.value = 'normal'
@@ -69,7 +96,7 @@ export const useRobotStore = defineStore('robot', () => {
     } else if (msg.type === 'response') {
       // parsed response already in log line; nothing to do unless we want colour
     } else if (msg.type === 'error') {
-      pushLog(`[ws] ${msg.reason}`, 'err')
+      pushLog(`通信错误：${msg.reason}`, 'err')
     }
   })
   ws.connect()
@@ -90,21 +117,21 @@ export const useRobotStore = defineStore('robot', () => {
     defaults.value = await api.getDefaults()
   }
   async function connect(port: string, baud: number) {
-    pushLog(`connecting ${port} @ ${baud}...`, 'info')
+    pushLog(`正在连接 ${port} @ ${baud}…`, 'info')
     try {
       connection.value = await api.connect(port, baud)
-      pushLog(`connected`, 'ok')
+      pushLog('连接成功', 'ok')
       // Reconnect WS so it subscribes to the newly opened transport
       ws.close()
       ws.connect()
     } catch (e) {
-      pushLog(`connect failed: ${(e as Error).message}`, 'err')
+      pushLog(`连接失败：${(e as Error).message}`, 'err')
       throw e
     }
   }
   async function disconnect() {
     connection.value = await api.disconnect()
-    pushLog('disconnected', 'info')
+    pushLog('已断开连接', 'info')
   }
   // Dry-run: synthesise the firmware acknowledgement that a real device would
   // emit, so that downstream state derivation (robotState badge, gating, etc.)
@@ -131,15 +158,15 @@ export const useRobotStore = defineStore('robot', () => {
       }
       const query = /^#(GET|STATUS|ONLINE)/.test(token) || token.startsWith('GETPID')
       if (['estop', 'paused'].includes(robotState.value) && !query && !['!STOP', '!RESUME', '!PAUSE'].includes(token)) {
-        pushLog(`拒绝指令：当前状态为 ${robotState.value}`, 'err')
+        pushLog(`拒绝指令：当前状态为${stateLabel(robotState.value)}`, 'err')
         throw new Error('当前处于急停或暂停状态，请先恢复')
       }
-      pushLog(`→ ${cmd}    [dry-run]`, 'tx')
+      pushLog(`→ ${cmd}    [模拟运行]`, 'tx')
       const ack = simulateAck(cmd)
       if (ack) {
         // Slight delay so the order in the console mirrors a real device.
         setTimeout(() => {
-          pushLog(ack, 'rx')
+          pushLog(localizeFirmwareLine(ack), 'rx')
           // Mirror the same robotState transitions the WS path would do.
           if (/^(Start|Home|Reset|Resume) OK$/.test(ack)) robotState.value = 'normal'
           else if (ack === 'Stop OK') robotState.value = 'estop'
@@ -147,15 +174,15 @@ export const useRobotStore = defineStore('robot', () => {
           else if (ack === 'Close OK') robotState.value = 'stopped'
         }, 30)
       }
-      return { ok: true, tag: 'DryRun', rest: '', error: '', raw: `${cmd} (dry-run)` }
+      return { ok: true, tag: 'DryRun', rest: '', error: '', raw: `${cmd}（模拟运行）` }
     }
     pushLog(`→ ${cmd}`, 'tx')
     try {
       const r = await api.raw(cmd)
-      pushLog(`← ${r.raw}`, r.ok ? 'ok' : 'err')
+      pushLog(`← ${localizeFirmwareLine(r.raw)}`, r.ok ? 'ok' : 'err')
       return r
     } catch (e) {
-      pushLog(`← ERROR: ${(e as Error).message}`, 'err')
+      pushLog(`← 错误：${(e as Error).message}`, 'err')
       throw e
     }
   }
@@ -173,14 +200,14 @@ export const useRobotStore = defineStore('robot', () => {
     const body = '&' + joints.map(fmt).join(',')
     const cmd = speedDeg == null ? body : `${body},${speedDeg}`
     if (dryRun.value) {
-      pushLog(`→ ${cmd}    [dry-run]`, 'tx')
+      pushLog(`→ ${cmd}    [模拟运行]`, 'tx')
       return
     }
     pushLog(`→ ${cmd}`, 'tx')
     try {
       await api.moveJoint(joints, speedDeg)
     } catch (e) {
-      pushLog(`MoveJ failed: ${(e as Error).message}`, 'err')
+      pushLog(`关节运动失败：${(e as Error).message}`, 'err')
       throw e
     }
   }

@@ -37,6 +37,15 @@ const summaryColor = computed(() => {
   return '#64748b'
 })
 
+function summaryLabel(summary: string | null | undefined): string {
+  if (!summary) return '尚未检测'
+  if (summary === 'all_online') return '全部在线'
+  if (summary === 'has_offline') return '存在离线节点'
+  const match = summary.match(/^node=(\d+)\s+(OL|NL)$/)
+  if (match) return `节点 ${match[1]}：${match[2] === 'OL' ? '在线' : '离线'}`
+  return summary
+}
+
 async function runOnlineAll() {
   if (!store.isConnected) {
     ElMessage.warning('设备未连接')
@@ -49,7 +58,7 @@ async function runOnlineAll() {
     lastResult.value = res
     store.pushLog(`← ${res.raw.join(' | ')}`, 'ok')
   } catch (e) {
-    store.pushLog(`← ERROR: ${(e as Error).message}`, 'err')
+    store.pushLog(`← 错误：${(e as Error).message}`, 'err')
     ElMessage.error((e as Error).message)
   } finally {
     onlineBusy.value = false
@@ -71,7 +80,7 @@ async function runOnlineNode(id: number) {
     }
     store.pushLog(`← ${res.raw.join(' | ')}`, 'ok')
   } catch (e) {
-    store.pushLog(`← ERROR: ${(e as Error).message}`, 'err')
+    store.pushLog(`← 错误：${(e as Error).message}`, 'err')
   } finally {
     onlineBusy.value = false
   }
@@ -100,7 +109,7 @@ async function runReboot() {
     return
   }
   const opt = REBOOT_OPTIONS.find((o) => o.value === rebootTarget.value)
-  const label = opt?.label ?? `node=${rebootTarget.value}`
+  const label = opt?.label ?? `节点 ${rebootTarget.value}`
   try {
     await ElMessageBox.confirm(
       `确认重启 ${label}？` + (opt?.danger ? '\n\n会触发主控系统复位，当前串口会断开。' : ''),
@@ -117,7 +126,7 @@ async function runReboot() {
     store.pushLog(`← ${res.raw}`, res.ok ? 'ok' : 'err')
     if (res.ok) ElMessage.success('已发送重启指令')
   } catch (e) {
-    store.pushLog(`← ERROR: ${(e as Error).message}`, 'err')
+    store.pushLog(`← 错误：${(e as Error).message}`, 'err')
     ElMessage.error((e as Error).message)
   } finally {
     rebootBusy.value = false
@@ -164,10 +173,10 @@ async function runCalibrate() {
   try {
     store.pushLog('→ !CALIBRATION', 'tx')
     await api.calibrate()
-    store.pushLog('← Calibration OK', 'ok')
+    store.pushLog('← 标定完成', 'ok')
     ElMessage.success('标定完成')
   } catch (e) {
-    store.pushLog(`← ERROR: ${(e as Error).message}`, 'err')
+    store.pushLog(`← 错误：${(e as Error).message}`, 'err')
     ElMessage.error((e as Error).message)
   } finally {
     calibBusy.value = false
@@ -198,7 +207,7 @@ async function runOffsetJ() {
     store.pushLog(`← ${res.raw}`, res.ok ? 'ok' : 'err')
     if (res.ok) ElMessage.success('偏移写入完成')
   } catch (e) {
-    store.pushLog(`← ERROR: ${(e as Error).message}`, 'err')
+    store.pushLog(`← 错误：${(e as Error).message}`, 'err')
     ElMessage.error((e as Error).message)
   } finally {
     offsetBusy.value = false
@@ -214,7 +223,7 @@ async function runCmdMode() {
     store.pushLog(`← ${res.raw}`, res.ok ? 'ok' : 'err')
     if (res.ok) ElMessage.success(`已设置模式 ${cmdMode.value}`)
   } catch (e) {
-    store.pushLog(`← ERROR: ${(e as Error).message}`, 'err')
+    store.pushLog(`← 错误：${(e as Error).message}`, 'err')
     ElMessage.error((e as Error).message)
   } finally {
     cmdModeBusy.value = false
@@ -227,7 +236,7 @@ async function runCmdMode() {
     <div class="header">
       <h2>设备诊断</h2>
       <span class="summary" :style="{ color: summaryColor }">
-        {{ lastResult?.summary ?? '尚未检测' }}
+        {{ summaryLabel(lastResult?.summary) }}
       </span>
     </div>
 

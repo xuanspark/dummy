@@ -99,7 +99,7 @@ async function sendMove() {
   const body = '@' + pose.map(fmtVal).join(',')
   const cmd = overrideSpeed.value ? `${body},${speed.value}` : body
   if (store.dryRun) {
-    store.pushLog(`→ ${cmd}    [dry-run]`, 'tx')
+    store.pushLog(`→ ${cmd}    [模拟运行]`, 'tx')
     return
   }
   sending.value = true

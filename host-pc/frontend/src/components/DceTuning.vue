@@ -31,28 +31,28 @@ type MotionField = { key: FieldKey; label: string; cmd: string; hint?: string; f
 type Field = DceField | MotionField
 
 const pidFields: DceField[] = [
-  { key: 'kp', label: 'KP', cmd: '#SET_DCE_KP', hint: 'Position gain',    family: 'dce', kind: 'kp' },
-  { key: 'kv', label: 'KV', cmd: '#SET_DCE_KV', hint: 'Velocity gain',    family: 'dce', kind: 'kv' },
-  { key: 'ki', label: 'KI', cmd: '#SET_DCE_KI', hint: 'Integral gain',    family: 'dce', kind: 'ki' },
-  { key: 'kd', label: 'KD', cmd: '#SET_DCE_KD', hint: 'Derivative gain',  family: 'dce', kind: 'kd' },
+  { key: 'kp', label: 'KP', cmd: '#SET_DCE_KP', hint: '位置增益', family: 'dce', kind: 'kp' },
+  { key: 'kv', label: 'KV', cmd: '#SET_DCE_KV', hint: '速度增益', family: 'dce', kind: 'kv' },
+  { key: 'ki', label: 'KI', cmd: '#SET_DCE_KI', hint: '积分增益', family: 'dce', kind: 'ki' },
+  { key: 'kd', label: 'KD', cmd: '#SET_DCE_KD', hint: '微分增益', family: 'dce', kind: 'kd' },
 ]
 const motionFields: MotionField[] = [
   { key: 'acc',    label: 'ACC_J',   cmd: '#ACC_J',     hint: '°/s²',           family: 'motion', kind: 'acc'     },
   { key: 'speed',  label: 'SPEED_J', cmd: '#SPEED_J',   hint: '°/s',            family: 'motion', kind: 'speed'   },
-  { key: 'iLimit', label: 'I_LIMIT', cmd: '#I_LIMIT_J', hint: 'Current clamp',  family: 'motion', kind: 'i_limit' },
+  { key: 'iLimit', label: 'I_LIMIT', cmd: '#I_LIMIT_J', hint: '电流限制', family: 'motion', kind: 'i_limit' },
 ]
 const fields: Field[] = [...pidFields, ...motionFields]
 
 function canSend(): boolean {
-  if (!store.isConnected && !store.dryRun) {
-    ElMessage.warning('Not connected (or enable Dry-run)')
+    if (!store.isConnected && !store.dryRun) {
+      ElMessage.warning('设备未连接，请先连接设备或开启模拟运行')
     return false
   }
   return true
 }
 
 function logTx(line: string) {
-  store.pushLog(`→ ${line}${store.dryRun ? '    [dry-run]' : ''}`, 'tx')
+  store.pushLog(`→ ${line}${store.dryRun ? '    [模拟运行]' : ''}`, 'tx')
 }
 
 async function dispatchField(f: Field, v: string): Promise<void> {
@@ -69,7 +69,7 @@ async function dispatchField(f: Field, v: string): Promise<void> {
       store.pushLog(`← ${res.raw}`, res.ok ? 'ok' : 'err')
     }
   } catch (e) {
-    store.pushLog(`← ERROR: ${(e as Error).message}`, 'err')
+      store.pushLog(`← 错误：${(e as Error).message}`, 'err')
     throw e
   }
 }
@@ -109,10 +109,10 @@ async function getDce() {
       if (g.ki != null) vals.value.ki = String(g.ki)
       if (g.kd != null) vals.value.kd = String(g.kd)
     } else {
-      store.pushLog(`← (no data for node ${n})`, 'err')
+    store.pushLog(`← 节点 ${n} 没有返回数据`, 'err')
     }
   } catch (e) {
-    store.pushLog(`← ERROR: ${(e as Error).message}`, 'err')
+    store.pushLog(`← 错误：${(e as Error).message}`, 'err')
     ElMessage.error((e as Error).message)
   }
 }
@@ -142,12 +142,12 @@ function clearAll() {
       <span class="j-badge">J{{ node }}</span>
       <span class="hint">KP / KV / KI / KD · motion limits, per joint</span>
       <span class="spacer" />
-      <label class="node-label">Node</label>
+      <label class="node-label">节点</label>
       <el-select v-model="node" style="width: 110px" size="small">
         <el-option v-for="i in 6" :key="i" :label="`${i} (J${i})`" :value="String(i)" />
       </el-select>
       <el-button size="small" :disabled="!store.isConnected && !store.dryRun" @click="getDce">
-        Get DCE
+        查询 DCE
       </el-button>
     </div>
 
@@ -165,7 +165,7 @@ function clearAll() {
           />
           <el-button size="small" type="primary"
             :disabled="!store.isConnected && !store.dryRun"
-            @click="sendOne(f)">Set</el-button>
+            @click="sendOne(f)">设置</el-button>
         </div>
       </div>
     </div>
@@ -184,7 +184,7 @@ function clearAll() {
           />
           <el-button size="small" type="primary"
             :disabled="!store.isConnected && !store.dryRun"
-            @click="sendOne(f)">Set</el-button>
+            @click="sendOne(f)">设置</el-button>
         </div>
       </div>
     </div>
@@ -192,9 +192,9 @@ function clearAll() {
     <div class="actions">
       <el-button size="small" type="success"
         :disabled="!store.isConnected && !store.dryRun" @click="sendAll">
-        Set All Filled
+        设置已填写项
       </el-button>
-      <el-button size="small" @click="clearAll">Clear Inputs</el-button>
+      <el-button size="small" @click="clearAll">清空输入</el-button>
       <span class="spacer" />
       <span class="warn">⚠ 数值写入关节板 RAM，需持久化请用固件命令</span>
     </div>
