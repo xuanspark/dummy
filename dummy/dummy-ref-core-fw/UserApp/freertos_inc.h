@@ -32,7 +32,7 @@ extern osThreadId_t uartServerTaskHandle;   // UART 轮询线程。Usage: 2048 B
 extern osThreadId_t oledTaskHandle;              // OLED 刷帧 + IMU 采样。Usage: 4000 Bytes stack
 extern osThreadId_t controlLoopFixUpdateHandle;  // 控制环主体（200 µs tick）。Usage: 4000 Bytes stack
 
-/*---------------- 60K (已使用) / 64K（FreeRTOS 在 CCRAM 总限） ------------------*/
+/*---------------- FreeRTOS 动态堆位于主 RAM，总容量 88 KB ------------------*/
 
 
 #ifdef __cplusplus

@@ -55,7 +55,7 @@
 uint64_t serialNumber;
 uint64_t myserial = 8;
 char serialNumberStr[13];
-__attribute__((section(".ccmram"))) uint8_t ucHeap[configTOTAL_HEAP_SIZE];
+uint8_t ucHeap[configTOTAL_HEAP_SIZE];
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
