@@ -305,6 +305,16 @@ public:
     bool RunHand(const char* command);
     bool TaskActive() const { return taskActive; }
     const char* StateName() const;
+    struct MotionFault {
+        const char* reason = "none";
+        uint32_t node = 0;
+        uint32_t feedbackAge = 0;
+        float error = 0;
+        uint32_t finished = 0;
+        uint32_t stalled = 0;
+    } motionFault;
+    bool TryMotionFault(const char* reason, uint8_t node, float error, uint32_t epoch);
+    void PollJointAngle();
     void RequestEmergencyStop();
     void ApplyEmergencyBrake();
     bool CanTransmit(uint8_t command, const uint8_t* data) const;
@@ -389,6 +399,7 @@ public:
 
 private:
     CAN_HandleTypeDef* hcan;
+    uint8_t feedbackNode = 1;
     float jointSpeed = DEFAULT_JOINT_SPEED;
     float jointSpeedRatio = 1;
 //    DOF6Kinematic::Joint6D_t dynamicJointSpeeds = {1, 1, 1, 1, 1, 1};

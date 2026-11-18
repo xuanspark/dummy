@@ -71,6 +71,7 @@ static bool currentFinishedWithoutContact = false;
 static float handPosition = 0;
 static int32_t gains[8][4] = {};
 static std::vector<float> j1Targets;
+static std::vector<int> angleQueries;
 bool CanSendMessage(CAN_context*, uint8_t* data, CAN_TxHeaderTypeDef* header)
 {
     int node = header->StdId >> 7;
@@ -105,6 +106,7 @@ bool CanSendMessage(CAN_context*, uint8_t* data, CAN_TxHeaderTypeDef* header)
         dummy.hand2->UpdateAngleCallback(handPosition, true, !currentFinishedWithoutContact);
     }
     if (command == 0x23) {
+        angleQueries.push_back(node);
         for (int n = node ? node : 1; n <= (node ? node : 7); ++n) {
             auto* motor = dummy.motorJ[n];
             motor->UpdateAngleCallback(motor->angle / 360 * motor->reduction * (motor->inverseDirection ? -1 : 1), motor->state == CtrlStepMotor::FINISH, motor->isStalled);
@@ -331,7 +333,45 @@ int main()
         Send("!HD_C"); RunOne();
         Require(dummy.robotState == DummyRobot::STATE_EMERGENCY_STOP &&
                 usb.text.find("HD_C OK") == std::string::npos, "current_settled_is_not_grip_complete");
+        Require(usb.text.find("reason=hand_contact_not_reported node=7") != std::string::npos,
+                "hand_timeout_reports_missing_contact");
+        Send("#STATUS"); ProcessAsciiCommand(0);
+        Require(usb.text.find("FAULT:hand_contact_not_reported NODE:7") != std::string::npos,
+                "fault_snapshot_query_allowed_during_stop");
         currentFinishedWithoutContact = false;
+
+        Reset();
+        currentFinishedWithoutContact = true;
+        bool stoppedAtHandDeadline = false;
+        uint32_t handDeadlineStart = 0;
+        delayHook = [&] {
+            if (!dummy.IsMoving() && dummy.hand2->state == CtrlStepMotor::FINISH) {
+                if (!handDeadlineStart) handDeadlineStart = tick - 20;
+                if (!stoppedAtHandDeadline && tick - handDeadlineStart >= 10000) {
+                    stoppedAtHandDeadline = true;
+                    Send("!STOP");
+                    currentFinishedWithoutContact = false;
+                    Send("!RESUME");
+                }
+            }
+        };
+        Send("!HD_O"); RunOne();
+        delayHook = {};
+        currentFinishedWithoutContact = false;
+        Require(stoppedAtHandDeadline && dummy.robotState == DummyRobot::STATE_NORMAL &&
+                usb.text.find("HD_O OK") != std::string::npos,
+                "stop_on_hand_deadline_does_not_fail_resumed_task");
+
+        Reset();
+        angleQueries.clear();
+        for (int n = 0; n < 12; ++n) dummy.PollJointAngle();
+        for (int n = 0; n < 12; ++n)
+            Require(angleQueries[n] == n % 6 + 1, "idle_feedback_round_robin_no_broadcast");
+        angleQueries.clear();
+        dummy.UpdateJointAngles();
+        Require(angleQueries == std::vector<int>({1, 2, 3, 4, 5, 6}), "joint_query_is_addressed");
+        Require(!dummy.TryMotionFault("stale_timeout", 7, 0, dummy.stopEpoch - 1) &&
+                dummy.robotState == DummyRobot::STATE_NORMAL, "stale_epoch_cannot_estop");
 
         Reset();
         auto sequence = dummy.motorJ[1]->angleSequence;

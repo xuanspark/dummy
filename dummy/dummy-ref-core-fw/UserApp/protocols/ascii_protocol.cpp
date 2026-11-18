@@ -201,12 +201,18 @@ void Execute(const Message& message)
     if (query) {
         if (!strcmp(command, "#STATUS")) {
             Respond(output, "Status OK STATE:%s CAN_RX:%lu CAN_DROP:%lu", dummy.StateName(), dummy.canRxTotal, dummy.canDroppedFrames);
+            Respond(output, "FW:%s BUILD:%s %s", CONFIG_FW_VERSION_TEXT, __DATE__, __TIME__);
+            const auto fault = dummy.motionFault;
+            Respond(output, "FAULT:%s NODE:%lu AGE_MS:%lu ERROR_DEG:%.2f FINISHED:%lu STALLED:%lu",
+                    fault.reason, fault.node, fault.feedbackAge, fault.error, fault.finished, fault.stalled);
             Respond(output, "ENABLED:%u HOMED:%u ACTIVE:%u QUEUE:%lu", dummy.IsEnabled(), dummy.IsHomed(), dummy.TaskActive(), 16 - dummy.commandHandler.GetSpace());
-            uint32_t now = HAL_GetTick();
             for (int n = 1; n <= 7; ++n) {
                 auto* motor = dummy.motorJ[n];
-                Respond(output, "%s[%d] %s age=%lums", n == 7 ? "HD" : "J", n,
-                    motor->isOnline ? "OL" : "NL", motor->lastResponseTick ? now - motor->lastResponseTick : 0xfffffffful);
+                const uint32_t received = motor->lastResponseTick;
+                const uint32_t age = HAL_GetTick() - received;
+                Respond(output, "%s[%d] %s age=%lums angle=%.2f finished=%u stalled=%u", n == 7 ? "HD" : "J", n,
+                    motor->isOnline ? "OL" : "NL", motor->isOnline ? static_cast<unsigned long>(age) : 0xfffffffful,
+                    motor->angle, motor->state == CtrlStepMotor::FINISH, motor->isStalled);
             }
             Respond(output, "Status End");
         } else if (!strcmp(command, "#GETJPOS") || !strcmp(command, "#GETLPOS")) {

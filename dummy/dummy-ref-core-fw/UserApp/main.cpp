@@ -52,20 +52,22 @@ void ThreadControlLoopFixUpdate(void* argument)
                     dummy.UpdateJointPose6D();
                     break;
             }
-            else dummy.UpdateJointAngles();
+            else {
+                dummy.PollJointAngle();
+            }
         } else if (dummy.IsEnabled() && dummy.robotState == DummyRobot::STATE_EMERGENCY_STOP)
         {
             // 急停：每 tick 主动广播 V=0 实现机械制动（幂等）。
             // 这保证即使状态由 USB ISR 偷拍设置，也能在 5ms 内真正刹车，
             // 不依赖 OnUsbAsciiCmd 调用 EmergencyStop()。
             dummy.ApplyEmergencyBrake();
-            dummy.UpdateJointAngles();
+            dummy.PollJointAngle();
             // 同步 targetJoints 为当前位置，避免 RESUME 后 MoveJoints 跳动
             dummy.UpdateJointPose6D();
         } else
         {
             // 未使能：只刷新关节状态
-            dummy.UpdateJointAngles();
+            dummy.PollJointAngle();
             dummy.UpdateJointPose6D();
         }
     }

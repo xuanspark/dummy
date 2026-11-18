@@ -293,6 +293,23 @@ void DummyRobot::MoveJoints(DOF6Kinematic::Joint6D_t pose)
         motorJ[n]->SetAngleWithVelocityLimit(pose.a[n - 1] - initPose.a[n - 1], dynamicJointSpeeds.a[n - 1]);
     }
 }
+bool DummyRobot::TryMotionFault(const char* reason, uint8_t node, float error, uint32_t epoch)
+{
+    uint32_t mask = __get_PRIMASK();
+    __disable_irq();
+    if (epoch != stopEpoch || robotState == STATE_EMERGENCY_STOP) {
+        __set_PRIMASK(mask);
+        return false;
+    }
+    auto* motor = motorJ[node];
+    motionFault = {reason, node, motor->angleSequence ? HAL_GetTick() - motor->lastAngleTick : 0xffffffffu,
+                   error, motor->state == CtrlStepMotor::FINISH, motor->isStalled};
+    RequestEmergencyStop();
+    __set_PRIMASK(mask);
+    SetRGBAutoSubState(RGB::AUTO_ESTOP);
+    return true;
+}
+
 bool DummyRobot::RunPose(const DOF6Kinematic::Joint6D_t& pose, float speed)
 {
     if (!WaitReady()) return false;
@@ -319,11 +336,17 @@ bool DummyRobot::RunPose(const DOF6Kinematic::Joint6D_t& pose, float speed)
         }
         MoveJoints(targetJoints);
         bool complete = true;
+        uint8_t failedNode = 1;
+        const char* failure = "arm_not_arrived";
         for (int n = 1; n <= 6; ++n) {
             auto* motor = motorJ[n];
             if (motor->angleSequence == sequences[n - 1] || HAL_GetTick() - motor->lastAngleTick > 250 ||
-                fabsf(currentJoints.a[n - 1] - pose.a[n - 1]) > 0.5f || motor->state != CtrlStepMotor::FINISH)
+                fabsf(currentJoints.a[n - 1] - pose.a[n - 1]) > 0.5f || motor->state != CtrlStepMotor::FINISH) {
                 complete = false;
+                failedNode = n;
+                failure = motor->angleSequence == sequences[n - 1] || HAL_GetTick() - motor->lastAngleTick > 250 ?
+                    "arm_feedback_timeout" : "arm_not_arrived";
+            }
         }
         if (complete && seenStop == stopEpoch && robotState != STATE_EMERGENCY_STOP) {
             armMotionActive = false;
@@ -331,13 +354,14 @@ bool DummyRobot::RunPose(const DOF6Kinematic::Joint6D_t& pose, float speed)
             jointSpeed = previousSpeed;
             return true;
         }
-        if (!IsEnabled() || activeTime >= 120000) break;
+        if ((!IsEnabled() || activeTime >= 120000) &&
+            TryMotionFault(IsEnabled() ? failure : "arm_disabled", failedNode,
+                           pose.a[failedNode - 1] - currentJoints.a[failedNode - 1], seenStop)) break;
         osDelay(10);
         activeTime += 10;
     }
     armMotionActive = false;
     jointSpeed = previousSpeed;
-    commandHandler.EmergencyStop();
     return false;
 }
 
@@ -375,6 +399,8 @@ bool DummyRobot::RunHand(const char* command)
         osDelay(20);
         activeTime += 20;
         settlingTime += 20;
+        // 等待期间可能收到 STOP 和 RESUME，必须先按新代次恢复，再判断旧动作超时。
+        if (seenStop != stopEpoch || robotState == STATE_EMERGENCY_STOP) continue;
         bool fresh = hand2->angleSequence != sequence && HAL_GetTick() - hand2->lastAngleTick <= 250;
         float target = hand2->ClosedAngle + percent / 100 * (hand2->OpenedAngle - hand2->ClosedAngle);
         bool arrived = positionMode ? (fabsf(hand2->angle - target) <= 1 && hand2->state == CtrlStepMotor::FINISH) :
@@ -386,8 +412,9 @@ bool DummyRobot::RunHand(const char* command)
             return true;
         }
         if (activeTime >= 10000 || !IsEnabled()) {
-            commandHandler.EmergencyStop();
-            return false;
+            const char* reason = !IsEnabled() ? "hand_disabled" : !fresh ? "hand_feedback_timeout" :
+                positionMode ? "hand_not_arrived" : "hand_contact_not_reported";
+            if (TryMotionFault(reason, 7, positionMode ? target - hand2->angle : 0, seenStop)) return false;
         }
     }
 }
@@ -447,6 +474,7 @@ uint32_t DummyRobot::CommandHandler::ParseCommand(const std::string& command)
         osDelay(5);
     }
     context->NotifyWorkStart();
+    context->motionFault = {};
     TransactionSink executionOutput(Output(activeChannel), activeRequest);
     Respond(executionOutput, "Task Executing");
     bool ok = false;
@@ -488,7 +516,12 @@ uint32_t DummyRobot::CommandHandler::ParseCommand(const std::string& command)
         Respond(output, "HD_ZERO OK MIN:%.2f MAX:%.2f STATE:%s", context->hand2->ClosedAngle,
                 context->hand2->OpenedAngle, context->StateName());
     else if (ok) Respond(output, "%s OK STATE:%s", tag, context->StateName());
-    else Respond(output, "%s Error: task_failed state=%s", tag, context->StateName());
+    else {
+        const auto& fault = context->motionFault;
+        Respond(output, "%s Error: task_failed state=%s reason=%s node=%lu age_ms=%lu error_deg=%.2f finished=%lu stalled=%lu",
+                tag, context->StateName(), fault.reason, fault.node, fault.feedbackAge,
+                fault.error, fault.finished, fault.stalled);
+    }
     return GetSpace();
 }
 
@@ -508,7 +541,16 @@ void DummyRobot::SetCommandMode(uint32_t mode)
     // 所有模式使用同一 FIFO 完成屏障，保证暂停和恢复不会覆盖尚未完成的目标。
     SetJointAcceleration(mode == COMMAND_CONTINUES_TRAJECTORY ? DEFAULT_JOINT_ACCELERATION_HIGH : DEFAULT_JOINT_ACCELERATION_LOW);
 }
-void DummyRobot::UpdateJointAngles() { motorJ[ALL]->UpdateAngle(); }
+void DummyRobot::PollJointAngle()
+{
+    // 定向轮询避免六个子板同时应答广播，低优先级节点因仲裁丢失反馈。
+    motorJ[feedbackNode]->UpdateAngle();
+    feedbackNode = feedbackNode == 6 ? 1 : feedbackNode + 1;
+}
+void DummyRobot::UpdateJointAngles()
+{
+    for (int n = 1; n <= 6; ++n) motorJ[n]->UpdateAngle();
+}
 void DummyRobot::UpdateJointAnglesCallback()
 {
     uint8_t flags = 0;
