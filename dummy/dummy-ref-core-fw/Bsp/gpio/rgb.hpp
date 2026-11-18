@@ -52,8 +52,8 @@ public:
         MODE_AUTO     = 11,
         // ---- 以下为自动模式子效果，不暴露给用户 ----
         _AUTO_STANDBY       = 100,  // 白色呼吸灯
-        _AUTO_WORKING       = 101,  // 绿色常亮
-        _AUTO_COMPLETE      = 102,  // 青色慢闪（短周期呼吸）
+        _AUTO_WORKING       = 101,  // 青色常亮
+        _AUTO_COMPLETE      = 102,  // 绿色慢闪（短周期呼吸）
         _AUTO_ESTOP         = 103,  // 红色线性快闪
         _AUTO_PAUSED        = 104,  // 黄色流水灯（彩虹变体）
     };

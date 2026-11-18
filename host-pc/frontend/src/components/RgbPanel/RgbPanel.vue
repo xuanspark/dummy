@@ -15,7 +15,7 @@
       <input v-model="color" type="color" :disabled="!available" aria-label="自定义灯光颜色" />
       <el-button :disabled="!available" @click="custom">设置颜色</el-button>
     </div>
-    <p v-if="mode === 11">待机：白色呼吸；工作：绿色常亮；完成：青色慢闪，约 5 秒后待机；急停：红色渐变快闪；暂停：黄色流水。</p>
+    <p v-if="mode === 11">待机：白色呼吸；工作：青色常亮；完成：绿色慢闪，约 5 秒后待机；急停：红色渐变快闪；暂停：黄色流水。</p>
   </section>
 </template>
 

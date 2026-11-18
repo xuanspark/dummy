@@ -57,10 +57,10 @@ void RGB::Run(RGB::Rgb_style_t mode) {
                     BreathEffect(100, 100, 100, 120);   // 白色呼吸灯
                     break;
                 case AUTO_WORKING:
-                    SolidColor(0, 100, 0);               // 绿色常亮
+                    SolidColor(0, 100, 100);             // 青色常亮
                     break;
                 case AUTO_COMPLETE:
-                    SlowFlash(0, 100, 100);              // 青色慢闪
+                    SlowFlash(0, 100, 0);                // 绿色慢闪
                     break;
                 case AUTO_ESTOP:
                     LinearFlash(100, 0, 0, 30);          // 红色线性快闪
@@ -78,10 +78,10 @@ void RGB::Run(RGB::Rgb_style_t mode) {
             BreathEffect(100, 100, 100, 120);
             break;
         case _AUTO_WORKING:
-            SolidColor(0, 100, 0);
+            SolidColor(0, 100, 100);
             break;
         case _AUTO_COMPLETE:
-            SlowFlash(0, 100, 100);
+            SlowFlash(0, 100, 0);
             break;
         case _AUTO_ESTOP:
             LinearFlash(100, 0, 0, 30);
