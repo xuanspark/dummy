@@ -199,12 +199,61 @@ bool ValidLimit(int parameter, float value)
     const float maximum[] = {1000, 30, 3.3f};
     return parameter >= 0 && parameter < 3 && value >= minimum[parameter] && value <= maximum[parameter];
 }
+bool ReadLimits(CtrlStepMotor* const* motors, uint32_t first, uint32_t last, int parameter)
+{
+    // 先一次性发出全部查询，再统一等待，避免每个节点和参数串行阻塞。
+    for (uint32_t n = first; n <= last; ++n) {
+        if (!motors[n]) continue;
+        for (int p = 0; p < 3; ++p) {
+            if (parameter >= 0 && parameter != p) continue;
+            motors[n]->QueryLimit(p);
+        }
+    }
+    const uint32_t deadline = HAL_GetTick() + 600;
+    while (HAL_GetTick() < deadline) {
+        bool complete = true;
+        for (uint32_t n = first; n <= last; ++n) {
+            if (!motors[n]) continue;
+            for (int p = 0; p < 3; ++p) {
+                if (parameter >= 0 && parameter != p) continue;
+                if (!(motors[n]->limitReceivedMask & (1u << p))) {
+                    complete = false;
+                    break;
+                }
+            }
+            if (!complete) break;
+        }
+        if (complete) return true;
+        osDelay(5);
+    }
+    return false;
+}
+
 bool ReadLimit(CtrlStepMotor* motor, int parameter)
 {
-    if (!motor->QueryLimit(parameter)) return false;
-    for (int wait = 0; wait < 50; ++wait) {
-        if (motor->limitReceivedMask & (1u << parameter)) return true;
-        osDelay(10);
+    if (!motor || parameter < 0 || parameter > 2) return false;
+    CtrlStepMotor* motors[2] = {nullptr, motor};
+    return ReadLimits(motors, 1, 1, parameter);
+}
+
+bool ReadJointAnglesFresh()
+{
+    uint32_t sequences[6] = {};
+    for (int n = 1; n <= 6; ++n) {
+        sequences[n - 1] = dummy.motorJ[n]->angleSequence;
+        dummy.motorJ[n]->UpdateAngle();
+    }
+    const uint32_t deadline = HAL_GetTick() + 120;
+    while (HAL_GetTick() < deadline) {
+        bool complete = true;
+        for (int n = 1; n <= 6; ++n) {
+            if (dummy.motorJ[n]->angleSequence == sequences[n - 1]) {
+                complete = false;
+                break;
+            }
+        }
+        if (complete) return true;
+        osDelay(2);
     }
     return false;
 }
@@ -238,12 +287,15 @@ void Execute(const Message& message)
                 Respond(output, "GetLimit Error: bad_args"); return;
             }
             Respond(output, "GetLimit Begin STATE:%s", dummy.StateName());
-            bool complete = true;
-            for (uint32_t n = all ? 1 : node; n <= (all ? 7 : node); ++n) {
+            const uint32_t first = all ? 1 : node;
+            const uint32_t last = all ? 7 : node;
+            bool complete = ReadLimits(dummy.motorJ, first, last, parameter);
+            for (uint32_t n = first; n <= last; ++n) {
+                auto* motor = dummy.motorJ[n];
                 for (int p = 0; p < 3; ++p) if (parameter < 0 || parameter == p) {
-                    auto* motor = dummy.motorJ[n];
-                    if (ReadLimit(motor, p)) Respond(output, "LIMIT NODE:%lu %s:%.6f APPLIED:%.6f", n, limitNames[p],
-                        motor->limits[p], motor->appliedLimits[p]);
+                    if (motor && (motor->limitReceivedMask & (1u << p)))
+                        Respond(output, "LIMIT NODE:%lu %s:%.6f APPLIED:%.6f", n, limitNames[p],
+                            motor->limits[p], motor->appliedLimits[p]);
                     else { complete = false; Respond(output, "LIMIT NODE:%lu %s:NL", n, limitNames[p]); }
                 }
             }
@@ -266,9 +318,9 @@ void Execute(const Message& message)
             }
             Respond(output, "Status End");
         } else if (!strcmp(command, "#GETJPOS") || !strcmp(command, "#GETLPOS")) {
-            dummy.UpdateJointAngles();
+            ReadJointAnglesFresh();
             dummy.hand2->UpdateAngle();
-            osDelay(30);
+            osDelay(10);
             if (!strcmp(command, "#GETJPOS")) {
                 auto& j = dummy.currentJoints;
                 Respond(output, "GetJPos OK %.2f %.2f %.2f %.2f %.2f %.2f H:%d", j.a[0], j.a[1], j.a[2], j.a[3], j.a[4], j.a[5], dummy.hand2->GetState());

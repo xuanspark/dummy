@@ -858,7 +858,7 @@ class Robot:
     async def get_motion_limits(self, node: Optional[int] = None) -> dict[int, dict[str, float]]:
         """读取保存限制与当前有效值，并缓存保存限制供动作命令限幅。"""
         cmd = "#GETLIMIT all" if node is None else f"#GETLIMIT {int(node)}"
-        lines = await self._collect_lines(cmd, lambda line: line.startswith("GetLimit Begin") or line.startswith("GetLimit Error"), quiet_ms=120, total_timeout=8.0)
+        lines = await self._collect_lines(cmd, lambda line: line.startswith("GetLimit Begin") or line.startswith("GetLimit Error"), quiet_ms=120, total_timeout=3.0)
         if any(line.startswith("GetLimit Error") for line in lines):
             raise RobotError("读取运动限制失败", P.ErrorCategory.COMM_TIMEOUT)
         for line in lines:

@@ -94,7 +94,7 @@ class ConnectionManager:
             # A failed query is reported in the connection result, while the
             # firmware remains the final safety limiter.
             try:
-                await robot.wait_limits(timeout=10.0)
+                await robot.wait_limits(timeout=4.0)
             except Exception as e:  # noqa: BLE001
                 log.warning("connection limit query did not complete: %s", e)
             self._robot = robot
