@@ -1,0 +1,25 @@
+{
+  "experiment": "J1 短音可行性和音量测试",
+  "version": "1.4.1-exp3",
+  "test_only": true,
+  "label": "TEST-J1-SOUND-RETEST",
+  "baseline": "755b2cc",
+  "component": "ref",
+  "files": {
+    "ref11180024_TEST-J1-SOUND-RETEST.bin": {
+      "bytes": 229748,
+      "sha256": "c3a6e19568a9363e28e5d00c2189736b043f836495cf51bb25901e47a269d90d"
+    },
+    "ref11180024_TEST-J1-SOUND-RETEST.hex": {
+      "bytes": 646166,
+      "sha256": "515af1392620f5216129cf955778113c92b3d4bd3e56d002394ab786a45992de"
+    },
+    "ref11180024_TEST-J1-SOUND-RETEST.elf": {
+      "bytes": 480168,
+      "sha256": "b2963d80384c8a054db8889b58b222185c4535c64807996c53e487f67f631166"
+    }
+  },
+  "initial_stack": "0x20020000",
+  "reset_vector": "0x802466d",
+  "hardware_tested": false
+}
