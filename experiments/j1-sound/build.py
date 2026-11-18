@@ -11,6 +11,7 @@ import tarfile
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 BASELINE = "755b2cc"
+TEST_LABEL = "TEST-J1-SOUND"
 PROJECTS = {
     "ref": ("dummy-ref-core-fw", "Core-STM32F4-fw", "ref"),
     "42": ("dummy-42motor-fw", "Ctrl-Step-STM32-fw", "42motor"),
@@ -47,7 +48,7 @@ def digest(path):
 
 def package(component, number):
     project, binary, prefix = PROJECTS[component]
-    name = f"{prefix}{datetime.now():%m%d}{number:04d}"
+    name = f"{prefix}{datetime.now():%m%d}{number:04d}_{TEST_LABEL}"
     destination = ROOT / "out" / component / name
     destination.mkdir(parents=True, exist_ok=True)
     files = {}
@@ -65,6 +66,7 @@ def package(component, number):
     if not 0x20000000 < stack <= ram_end or not reset & 1 or not 0x08000000 < reset < 0x08000000 + len(data):
         raise RuntimeError("启动向量检查未通过")
     manifest = {"experiment": "J1 短音可行性和音量测试", "version": "1.2.1-exp1",
+                "test_only": True, "label": TEST_LABEL,
                 "baseline": BASELINE, "component": component, "files": files,
                 "initial_stack": hex(stack), "reset_vector": hex(reset),
                 "hardware_tested": False}
