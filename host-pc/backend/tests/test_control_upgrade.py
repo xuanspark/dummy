@@ -244,6 +244,28 @@ async def test_raw_limit_warning_is_bound_to_each_response(correlated_pair):
     assert second.warning == ""
 
 
+async def test_motion_command_rejects_offline_node_without_using_old_limits(correlated_pair):
+    robot, transport = correlated_pair
+
+    def offline_reply(wire):
+        request, command = unpack(wire)
+        if command.startswith("#ONLINE"):
+            return [
+                f"R:{request} Online OK has_offline",
+                *[f"R:{request} {'HAND' if n == 7 else 'J'}[{n}] {'NL' if n == 6 else 'OL'}" for n in range(1, 8)],
+                f"R:{request} Online End",
+            ]
+        return []
+
+    transport.on(lambda wire: unpack(wire)[1].startswith("#ONLINE"), offline_reply)
+    robot._motion_limits = {1: {"speed": 20.0}}
+
+    with pytest.raises(RobotError, match="离线节点：6"):
+        await robot.raw("&0,0,90,0,0,0,100")
+    assert not any(unpack(wire)[1].startswith("&") for wire in transport.tx_log)
+    assert robot._motion_limits == {}
+
+
 @pytest.mark.parametrize("command", ["!HOME\n!CLOSE", "#GETSPEED\r!STOP", "!DISABLE"])
 async def test_bypass_commands_never_sent(correlated_pair, command):
     robot, transport = correlated_pair

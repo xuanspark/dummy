@@ -93,6 +93,17 @@ class FakeTransport:
 @pytest.fixture
 async def robot_pair():
     t = FakeTransport()
+    t.on("#ONLINE", lambda line: (
+        ["Online OK node=7 OL", "Online End"] if line.startswith("#ONLINE 7") else
+        ["Online OK all_online", "J[1] OL", "J[2] OL", "J[3] OL", "J[4] OL", "J[5] OL", "J[6] OL", "HAND[7] OL", "Online End"]
+    ))
+    t.on("#GETLIMIT", lambda line: (
+        ["GetLimit Begin STATE:NORMAL"] + [
+            f"LIMIT NODE:{n} {kind}:{value:.6f} APPLIED:{value:.6f}"
+            for n in ([int(line.split()[1])] if len(line.split()) == 2 and line.split()[1].isdigit() else range(1, 8))
+            for kind, value in (("ACC", 10.0), ("SPEED", 20.0), ("CURRENT", 1.0))
+        ] + ["GetLimit End"]
+    ))
     r = Robot(t, default_timeout=2.0)
     await r.start()
     try:
