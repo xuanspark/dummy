@@ -80,9 +80,8 @@ class Robot:
 
     async def _load_limits_on_connect(self) -> None:
         try:
-            self._motion_limits.clear()
-            await self.get_motion_limits()
-            if not self._motion_limits:
+            fresh = await self.get_motion_limits()
+            if not fresh:
                 raise RobotError("连接后未读取到运动限制", P.ErrorCategory.COMM_TIMEOUT)
             self.limits_ready = True
             self._limits_error = None
@@ -396,11 +395,11 @@ class Robot:
             raise RobotError("实时速度限制不可用", P.ErrorCategory.COMM_TIMEOUT)
         applied = min([speed, *caps])
         if applied < speed:
-            return applied, f"速度 {speed:g} 超过已保存上限，已按 {applied:g} 执行"
+            return applied, f"速度 {speed:g} 超过实时上限，已按 {applied:g} 执行"
         return speed, ""
 
     async def _prepare_limit_command(self, command: str) -> str:
-        """Clamp manual motion/current commands using the connection snapshot."""
+        """Clamp manual motion/current commands using a fresh device query."""
         self.last_limit_warning = ""
         self.last_applied_command = command
         if command[:1] in "&@>":
@@ -427,7 +426,7 @@ class Robot:
                 raise RobotError("实时手爪电流限制不可用", P.ErrorCategory.COMM_TIMEOUT)
             if requested > limit:
                 command = f"!HD_I {limit:g}"
-                self.last_limit_warning = f"手爪电流 {requested:g} 超过已保存上限，已按 {limit:g} 执行"
+                self.last_limit_warning = f"手爪电流 {requested:g} 超过实时上限，已按 {limit:g} 执行"
         self.last_applied_command = command
         return command
 
@@ -861,27 +860,33 @@ class Robot:
         # Format float cleanly; firmware parses %f
         s = f"{v:.6f}".rstrip('0').rstrip('.') or "0"
         response = await self._exec(f"{self._MOTION_CMDS[k]} {int(node)} {s}")
-        self._motion_limits.setdefault(int(node), {})[k] = v
         return response
 
     async def get_motion_limits(self, node: Optional[int] = None) -> dict[int, dict[str, float]]:
-        """读取保存限制与当前有效值，并缓存保存限制供动作命令限幅。"""
+        """读取设备当前限制；每次调用都验证节点在线，不使用历史缓存。"""
         cmd = "#GETLIMIT all" if node is None else f"#GETLIMIT {int(node)}"
         fresh: dict[int, dict[str, float]] = {}
+        expected_nodes = [int(node)] if node is not None else list(range(1, 8))
+        self._motion_limits.clear()
+
+        online = await self.check_online(node, quiet_ms=120, total_timeout=3.0)
+        offline = [item for item in expected_nodes if online["nodes"].get(item) is not True]
+        if offline:
+            raise RobotError(
+                f"实时节点状态无效，离线节点：{','.join(map(str, offline))}",
+                P.ErrorCategory.COMM_TIMEOUT,
+            )
+
         lines = await self._collect_lines(cmd, lambda line: line.startswith("GetLimit Begin") or line.startswith("GetLimit Error"), quiet_ms=120, total_timeout=3.0)
         if any(line.startswith("GetLimit Error") for line in lines):
-            self._motion_limits.clear()
             raise RobotError("读取运动限制失败", P.ErrorCategory.COMM_TIMEOUT)
         for line in lines:
             match = re.match(r"LIMIT NODE:(\d+) (ACC|SPEED|CURRENT):([0-9.+-eE]+)", line)
             if match:
                 key = {"ACC": "acc", "SPEED": "speed", "CURRENT": "i_limit"}[match[2]]
                 fresh.setdefault(int(match[1]), {})[key] = float(match[3])
-        expected_nodes = [int(node)] if node is not None else list(range(1, 8))
         if any(set(fresh.get(item, {})) != {"acc", "speed", "i_limit"} for item in expected_nodes):
-            self._motion_limits.clear()
             raise RobotError("实时运动限制参数不完整", P.ErrorCategory.COMM_TIMEOUT)
-        self._motion_limits = fresh
         if node is None:
             return fresh
         return {int(node): dict(fresh[int(node)])}

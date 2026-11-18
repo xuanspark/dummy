@@ -211,7 +211,7 @@ async def state_full(r: Robot = Depends(get_robot)):
         "speed": s.last_speed,
         "motion_state": s.motion_state,
         "limits_ready": r.limits_ready,
-        "motion_limits": r._motion_limits,
+        "motion_limits": {},
         "limit_warning": r.last_limit_warning,
         "limit_error": r.limits_error,
     }

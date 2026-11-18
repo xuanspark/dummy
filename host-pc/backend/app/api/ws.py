@@ -70,7 +70,7 @@ async def ws_endpoint(websocket: WebSocket) -> None:
             "speed": s.last_speed,
             "motion_state": s.motion_state,
             "limits_ready": robot.limits_ready,
-            "motion_limits": robot._motion_limits,
+            "motion_limits": {},
             "limit_warning": robot.last_limit_warning,
         }))
 

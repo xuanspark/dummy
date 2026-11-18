@@ -18,6 +18,29 @@ def unpack(wire):
 @pytest.fixture
 async def correlated_pair():
     transport = FakeTransport()
+    def realtime_reply(wire):
+        request, command = unpack(wire)
+        if command.startswith("#ONLINE"):
+            if command == "#ONLINE 7":
+                return [f"R:{request} Online OK node=7 OL", f"R:{request} Online End"]
+            return [
+                f"R:{request} Online OK all_online",
+                *[f"R:{request} {'HAND' if n == 7 else 'J'}[{n}] OL" for n in range(1, 8)],
+                f"R:{request} Online End",
+            ]
+        if command.startswith("#GETLIMIT"):
+            nodes = [int(command.split()[1])] if len(command.split()) == 2 and command.split()[1].isdigit() else range(1, 8)
+            lines = [f"R:{request} GetLimit Begin STATE:NORMAL"]
+            for n in nodes:
+                lines.extend([
+                    f"R:{request} LIMIT NODE:{n} ACC:10.000000 APPLIED:10.000000",
+                    f"R:{request} LIMIT NODE:{n} SPEED:20.000000 APPLIED:20.000000",
+                    f"R:{request} LIMIT NODE:{n} CURRENT:1.000000 APPLIED:1.000000",
+                ])
+            lines.append(f"R:{request} GetLimit End")
+            return lines
+        return []
+    transport.on(lambda wire: unpack(wire)[1].startswith(("#ONLINE", "#GETLIMIT")), realtime_reply)
     robot = Robot(transport, correlated=True)
     await robot.start()
     try:
@@ -50,7 +73,7 @@ async def test_stop_and_query_during_inflight_action(correlated_pair):
     action = asyncio.create_task(robot.move_j([20, 0, 90, 0, 0, 0], 100))
     await settle()
     assert not action.done()
-    request, _ = unpack(transport.tx_log[0])
+    request, _ = next(unpack(wire) for wire in transport.tx_log if unpack(wire)[1].startswith("&"))
     await asyncio.wait_for(robot.raw("!STOP"), 0.3)
     assert robot.state.motion_state == "EMERGENCY_STOP"
     assert await asyncio.wait_for(robot.get_speed(), 0.3) == 100
@@ -159,9 +182,8 @@ async def test_bad_pid_never_sent(correlated_pair, values):
     assert not transport.tx_log
 
 
-async def test_raw_motion_command_uses_cached_limit_and_returns_warning(correlated_pair):
+async def test_raw_motion_command_uses_realtime_limit_and_returns_warning(correlated_pair):
     robot, transport = correlated_pair
-    robot._motion_limits = {1: {"speed": 20.0}, 2: {"speed": 30.0}}
 
     def reply(wire):
         request, command = unpack(wire)
@@ -176,9 +198,20 @@ async def test_raw_motion_command_uses_cached_limit_and_returns_warning(correlat
     assert "20" in response.warning
 
 
-async def test_raw_hand_current_uses_cached_limit(correlated_pair):
+async def test_raw_hand_current_uses_realtime_limit(correlated_pair):
     robot, transport = correlated_pair
-    robot._motion_limits = {7: {"i_limit": 0.5}}
+
+    def limit_reply(wire):
+        request, _ = unpack(wire)
+        return [
+            f"R:{request} GetLimit Begin STATE:NORMAL",
+            f"R:{request} LIMIT NODE:7 ACC:10.000000 APPLIED:10.000000",
+            f"R:{request} LIMIT NODE:7 SPEED:20.000000 APPLIED:20.000000",
+            f"R:{request} LIMIT NODE:7 CURRENT:0.500000 APPLIED:0.500000",
+            f"R:{request} GetLimit End",
+        ]
+
+    transport.on(lambda wire: unpack(wire)[1] == "#GETLIMIT 7", limit_reply)
 
     def reply(wire):
         request, command = unpack(wire)
@@ -195,7 +228,6 @@ async def test_raw_hand_current_uses_cached_limit(correlated_pair):
 
 async def test_raw_limit_warning_is_bound_to_each_response(correlated_pair):
     robot, transport = correlated_pair
-    robot._motion_limits = {1: {"speed": 20.0}}
 
     def reply(wire):
         request, command = unpack(wire)
@@ -293,6 +325,25 @@ def test_websocket_raw_returns_limit_warning_for_submitted_command():
 
     def reply(wire):
         request, command = unpack(wire)
+        if command == "#ONLINE 7":
+            return [f"R:{request} Online OK node=7 OL", f"R:{request} Online End"]
+        if command.startswith("#ONLINE"):
+            return [
+                f"R:{request} Online OK all_online",
+                *[f"R:{request} {'HAND' if n == 7 else 'J'}[{n}] OL" for n in range(1, 8)],
+                f"R:{request} Online End",
+            ]
+        if command.startswith("#GETLIMIT"):
+            nodes = [int(command.split()[1])] if len(command.split()) == 2 and command.split()[1].isdigit() else range(1, 8)
+            lines = [f"R:{request} GetLimit Begin STATE:NORMAL"]
+            for n in nodes:
+                lines.extend([
+                    f"R:{request} LIMIT NODE:{n} ACC:10.000000 APPLIED:10.000000",
+                    f"R:{request} LIMIT NODE:{n} SPEED:20.000000 APPLIED:20.000000",
+                    f"R:{request} LIMIT NODE:{n} CURRENT:1.000000 APPLIED:1.000000",
+                ])
+            lines.append(f"R:{request} GetLimit End")
+            return lines
         if command.startswith("&"):
             return [f"R:{request} Move OK"]
         return []
@@ -301,7 +352,6 @@ def test_websocket_raw_returns_limit_warning_for_submitted_command():
     with TestClient(app) as client:
         async def setup():
             robot = Robot(transport, correlated=True)
-            robot._motion_limits = {1: {"speed": 20.0}}
             await robot.start()
             app.state.manager._robot = robot
 

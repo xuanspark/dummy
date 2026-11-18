@@ -64,15 +64,22 @@ class FakeTransport:
 
     def write_line(self, line: str) -> None:
         self.tx_log.append(line)
-        for matcher, handler in self._handlers:
+        for matcher, handler in reversed(self._handlers):
             if matcher(line):
-                for reply in handler(line):
-                    for s in self._subs:
-                        try:
-                            s.queue.put_nowait(reply)
-                        except asyncio.QueueFull:
-                            pass
-                return
+                replies = list(handler(line))
+                command = line.split(" ", 1)[1] if line.startswith("T:") and " " in line else line
+                if command.startswith("#ONLINE") and not any(" Online " in f" {reply} " for reply in replies):
+                    continue
+                if command.startswith("#GETLIMIT") and not any(" GetLimit " in f" {reply} " for reply in replies):
+                    continue
+                if replies:
+                    for reply in replies:
+                        for s in self._subs:
+                            try:
+                                s.queue.put_nowait(reply)
+                            except asyncio.QueueFull:
+                                pass
+                    return
         # No handler → silence (Robot will time out, which is the correct
         # behaviour to assert in negative tests).
 
@@ -111,6 +118,17 @@ class FakeTransport:
 async def robot_pair():
     """Yield ``(robot, transport)`` ready to receive commands."""
     t = FakeTransport()
+    t.on("#ONLINE", lambda line: (
+        ["Online OK node=7 OL", "Online End"] if line.startswith("#ONLINE 7") else
+        ["Online OK all_online", "J[1] OL", "J[2] OL", "J[3] OL", "J[4] OL", "J[5] OL", "J[6] OL", "HAND[7] OL", "Online End"]
+    ))
+    t.on("#GETLIMIT", lambda line: (
+        [f"GetLimit Begin STATE:NORMAL"] + [
+            f"LIMIT NODE:{n} {kind}:{value:.6f} APPLIED:{value:.6f}"
+            for n in ([int(line.split()[1])] if len(line.split()) == 2 and line.split()[1].isdigit() else range(1, 8))
+            for kind, value in (("ACC", 10.0), ("SPEED", 20.0), ("CURRENT", 1.0))
+        ] + ["GetLimit End"]
+    ))
     r = Robot(t, default_timeout=2.0)
     await r.start()
     try:
@@ -217,7 +235,8 @@ class TestHand:
         t.on("!HD_I", lambda l: [f"HD_I OK current={l.split()[-1]}"])
         await r.hand_current(0.5)
         # Trailing zero trimming → "0.5"
-        assert t.tx_log == ["!HD_I 0.5"]
+        assert t.tx_log[-1] == "!HD_I 0.5"
+        assert t.tx_log[:2] == ["#ONLINE 7", "#GETLIMIT 7"]
 
 
 # =============================== rgb ======================================

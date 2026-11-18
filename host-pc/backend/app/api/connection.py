@@ -54,7 +54,7 @@ async def connect(body: ConnectBody, mgr: ConnectionManager = Depends(get_manage
         "port": mgr.port,
         "baud": mgr.baud,
         "limits_ready": bool(robot and robot.limits_ready),
-        "motion_limits": robot._motion_limits if robot else {},
+        "motion_limits": {},
         "limit_warning": robot.last_limit_warning if robot else "",
     }
 
