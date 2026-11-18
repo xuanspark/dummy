@@ -107,7 +107,8 @@ async function sendMove() {
   let succeeded = false
   store.pushLog(`→ ${cmd}`, 'tx')
   try {
-    await api.moveCart(pose, overrideSpeed.value ? speed.value : undefined)
+    const result = await api.moveCart(pose, overrideSpeed.value ? speed.value : undefined)
+    if (result.warning) store.pushLog(`限制提醒：${result.warning}`, 'info')
     succeeded = true
   } catch (e) {
     store.pushLog(`末端运动失败：${(e as Error).message}`, 'err')

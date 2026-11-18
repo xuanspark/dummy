@@ -16,7 +16,10 @@ export default defineComponent({
       try {
         store.pushLog(`→ ${command}`, 'tx')
         if (store.dryRun) await store.sendRaw(command)
-        else await operation()
+        else {
+          const result = await operation() as { warning?: string } | undefined
+          if (result?.warning) store.pushLog(`限制提醒：${result.warning}`, 'info')
+        }
         store.pushLog(`${label}完成`, 'ok')
       } catch (error) {
         ElMessage.error((error as Error).message)

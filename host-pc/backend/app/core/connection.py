@@ -90,6 +90,13 @@ class ConnectionManager:
                 except Exception:  # noqa: BLE001
                     pass
                 raise TransportError(f"failed to open {port}@{baud}: {e}") from e
+            # The first limit snapshot is part of the connection handshake.
+            # A failed query is reported in the connection result, while the
+            # firmware remains the final safety limiter.
+            try:
+                await robot.wait_limits(timeout=10.0)
+            except Exception as e:  # noqa: BLE001
+                log.warning("connection limit query did not complete: %s", e)
             self._robot = robot
             self._port = port
             self._baud = baud

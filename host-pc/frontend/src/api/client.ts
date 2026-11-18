@@ -30,6 +30,14 @@ export interface ConnectionState {
   baud: number | null
 }
 
+export type MotionLimits = Record<string, Record<string, number>>
+
+export interface ConnectResult extends ConnectionState {
+  limits_ready: boolean
+  motion_limits: MotionLimits
+  limit_warning: string
+}
+
 export interface JointPos {
   j1: number; j2: number; j3: number
   j4: number; j5: number; j6: number
@@ -71,7 +79,7 @@ export const api = {
   getConnection: () => http.get<ConnectionState>('/api/connection').then((r) => r.data),
   getDefaults: () => http.get<{ port: string; baud: number }>('/api/connection/defaults').then((r) => r.data),
   connect: (port: string, baud: number) =>
-    http.post<ConnectionState>('/api/connect', { port, baud }).then((r) => r.data),
+    http.post<ConnectResult>('/api/connect', { port, baud }).then((r) => r.data),
   disconnect: () => http.post<ConnectionState>('/api/disconnect').then((r) => r.data),
 
   // ---------- robot lifecycle ----------
@@ -90,7 +98,9 @@ export const api = {
     http.post<{ ok: boolean; requested_speed?: number; applied_speed?: number; warning?: string }>('/api/move/joint', speed == null ? { joints } : { joints, speed }, { timeout: 0 })
       .then((r) => r.data),
   moveCart: (pose: number[], speed?: number) =>
-    http.post('/api/move/cart', speed == null ? { pose } : { pose, speed }, { timeout: 0 })
+    http.post<{ ok: boolean; requested_speed?: number; applied_speed?: number; warning?: string }>(
+      '/api/move/cart', speed == null ? { pose } : { pose, speed }, { timeout: 0 },
+    )
       .then((r) => r.data),
 
   // ---------- queries ----------
@@ -106,7 +116,10 @@ export const api = {
   handZero: () =>
     http.post<{ ok: boolean; closed: number; opened: number }>('/api/hand/zero', {}, { timeout: 0 })
       .then((r) => r.data),
-  handCurrent: (amps: number) => http.post('/api/hand/current', { amps }).then((r) => r.data),
+  handCurrent: (amps: number) =>
+    http.post<{ ok: boolean; requested_amps?: number; applied_amps?: number; warning?: string }>(
+      '/api/hand/current', { amps },
+    ).then((r) => r.data),
 
   // ---------- tuning ----------
   setDceGain: (node: number, kind: DceKind, value: number) =>
@@ -160,7 +173,7 @@ export const api = {
 
   // ---------- raw ----------
   raw: (command: string, timeout?: number) =>
-    http.post<{ ok: boolean; tag: string; rest: string; error: string; raw: string }>(
+    http.post<{ ok: boolean; tag: string; rest: string; error: string; raw: string; warning?: string; applied_command?: string }>(
       '/api/raw', { command, timeout }, { timeout: 0 },
     ).then((r) => r.data),
 }
@@ -169,7 +182,8 @@ export const api = {
 
 export type WsMessage =
   | { type: 'state'; connected: boolean; port?: string; baud?: number
-      jpos: JointPos | null; lpos: CartPos | null; speed: number | null; message?: string; motion_state?: string }
+      jpos: JointPos | null; lpos: CartPos | null; speed: number | null; message?: string; motion_state?: string
+      limits_ready?: boolean; motion_limits?: MotionLimits; limit_warning?: string }
   | { type: 'log'; line: string; noise?: boolean }
   | { type: 'response'; tag: string; ok: boolean; rest: string; error: string }
   | { type: 'pong' }

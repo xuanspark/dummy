@@ -308,7 +308,37 @@ const App = function(props) {
     return null;                                                            // 其余命令不预测，等 STATUS
   };
 
+  const clampCachedCommand = (msg) => {
+    var command = (msg || '').trim();
+    if (/^[&@>]/.test(command)) {
+      var parts = command.split(',');
+      if (parts.length >= 7) {
+        var requested = parseFloat(parts[parts.length - 1]);
+        var caps = Object.keys(motionLimitsRef.current)
+          .map(k => motionLimitsRef.current[k].speed)
+          .filter(Number.isFinite);
+        if (Number.isFinite(requested) && caps.length) {
+          var applied = Math.min.apply(Math, [requested].concat(caps));
+          if (applied < requested) {
+            parts[parts.length - 1] = String(applied);
+            command = parts.join(',');
+            queueMessage({data: '限制提醒：速度已按已保存上限调整为 ' + applied, uart: false, type: 'reject'});
+          }
+        }
+      }
+    } else if (/^!HD_I\s+/i.test(command)) {
+      var current = parseFloat(command.split(/\s+/)[1]);
+      var limit = motionLimitsRef.current['7'] && motionLimitsRef.current['7'].iLimit;
+      if (Number.isFinite(current) && Number.isFinite(limit) && current > limit) {
+        command = '!HD_I ' + limit;
+        queueMessage({data: '限制提醒：手爪电流已按已保存上限调整为 ' + limit, uart: false, type: 'reject'});
+      }
+    }
+    return command;
+  };
+
   const wsSend = (msg) => {
+    msg = clampCachedCommand(msg);
     // 乐观预测（0 ms 切换徽章）
     const next = transitionOnSend(msg, predicted || committed);
     if (next) {
@@ -363,10 +393,6 @@ const App = function(props) {
     var offs = lastOffsetsRef.current;
     var abs  = offs.map((o, i) => (isFinite(o) ? o : 0) + HOME[i]);
     var speed = parseFloat(velocity);
-    var speedLimits = Object.keys(motionLimitsRef.current).map(k => motionLimitsRef.current[k].speed).filter(Number.isFinite);
-    if (speedLimits.length && speed < parseFloat(velocity)) {
-      queueMessage({data: '限制提醒：速度已按已保存上限调整为 ' + speed, uart: false, type: 'reject'});
-    }
     wsSend('&' + abs.join(',') + ',' + speed);
   };
 

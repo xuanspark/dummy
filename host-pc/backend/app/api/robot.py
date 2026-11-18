@@ -213,6 +213,7 @@ async def state_full(r: Robot = Depends(get_robot)):
         "limits_ready": r.limits_ready,
         "motion_limits": r._motion_limits,
         "limit_warning": r.last_limit_warning,
+        "limit_error": r.limits_error,
     }
 
 
@@ -281,8 +282,8 @@ async def hand_zero(r: Robot = Depends(get_robot)):
 @router.post("/hand/current")
 async def hand_current(body: HandCurrentBody, r: Robot = Depends(get_robot)):
     """``!HD_I <amps>`` — set gripper current limit (0 < amps ≤ 2.0)."""
-    await _run(r.hand_current(body.amps))
-    return {"ok": True}
+    result = await _run(r.hand_current(body.amps))
+    return {"ok": True, **(result or {})}
 
 
 # ---------- rgb ----------
@@ -450,4 +451,12 @@ async def raw(body: RawCmd, r: Robot = Depends(get_robot)):
                 detail=f"raw: '{prefix}' is a restricted command; use the dedicated API endpoint",
             )
     resp = await _run(r.raw(body.command, body.timeout))
-    return {"ok": resp.ok, "tag": resp.tag, "rest": resp.rest, "error": resp.error, "raw": resp.raw}
+    return {
+        "ok": resp.ok,
+        "tag": resp.tag,
+        "rest": resp.rest,
+        "error": resp.error,
+        "raw": resp.raw,
+        "warning": r.last_limit_warning,
+        "applied_command": r.last_applied_command,
+    }

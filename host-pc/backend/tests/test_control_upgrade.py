@@ -159,6 +159,36 @@ async def test_bad_pid_never_sent(correlated_pair, values):
     assert not transport.tx_log
 
 
+async def test_raw_motion_command_uses_cached_limit_and_returns_warning(correlated_pair):
+    robot, transport = correlated_pair
+    robot._motion_limits = {1: {"speed": 20.0}, 2: {"speed": 30.0}}
+
+    def reply(wire):
+        request, command = unpack(wire)
+        assert command.endswith(",20")
+        return [f"R:{request} Move OK"]
+
+    transport.on(lambda wire: unpack(wire)[1].startswith("&"), reply)
+    await robot.raw("&0,0,90,0,0,0,100")
+    assert transport.tx_log[-1].endswith(",20")
+    assert "20" in robot.last_limit_warning
+
+
+async def test_raw_hand_current_uses_cached_limit(correlated_pair):
+    robot, transport = correlated_pair
+    robot._motion_limits = {7: {"i_limit": 0.5}}
+
+    def reply(wire):
+        request, command = unpack(wire)
+        assert command == "!HD_I 0.5"
+        return [f"R:{request} HD_I OK current=0.5"]
+
+    transport.on(lambda wire: unpack(wire)[1].startswith("!HD_I"), reply)
+    await robot.raw("!HD_I 1.2")
+    assert transport.tx_log[-1].endswith("!HD_I 0.5")
+    assert "0.5" in robot.last_limit_warning
+
+
 @pytest.mark.parametrize("command", ["!HOME\n!CLOSE", "#GETSPEED\r!STOP", "!DISABLE"])
 async def test_bypass_commands_never_sent(correlated_pair, command):
     robot, transport = correlated_pair

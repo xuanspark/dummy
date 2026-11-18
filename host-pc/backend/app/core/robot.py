@@ -58,8 +58,11 @@ class Robot:
         self._suspended_since: float | None = None
         self._motion_limits: dict[int, dict[str, float]] = {}
         self._limits_task: Optional[asyncio.Task] = None
+        self._limits_ready_event = asyncio.Event()
+        self._limits_error: str | None = None
         self.limits_ready = False
         self.last_limit_warning = ""
+        self.last_applied_command = ""
 
     # ---- lifecycle ----
     async def start(self) -> None:
@@ -70,19 +73,37 @@ class Robot:
         self.state.connected = True
         self._dispatcher_task = asyncio.create_task(self._dispatch_loop(), name="robot-rx")
         if self._t.__class__.__name__ == "SerialTransport":
+            self._limits_ready_event.clear()
             self._limits_task = asyncio.create_task(self._load_limits_on_connect(), name="robot-limits")
+        else:
+            self._limits_ready_event.set()
 
     async def _load_limits_on_connect(self) -> None:
         try:
+            self._motion_limits.clear()
             await self.get_motion_limits()
+            if not self._motion_limits:
+                raise RobotError("连接后未读取到运动限制", P.ErrorCategory.COMM_TIMEOUT)
             self.limits_ready = True
+            self._limits_error = None
             self.last_limit_warning = ""
         except asyncio.CancelledError:
             raise
         except Exception as error:  # noqa: BLE001
             self.limits_ready = False
+            self._limits_error = str(error)
             self.last_limit_warning = "连接后读取运动限制失败，动作仍由固件最终限幅"
             log.warning("连接后读取运动限制失败: %s", error)
+        finally:
+            self._limits_ready_event.set()
+
+    async def wait_limits(self, timeout: float = 10.0) -> None:
+        """Wait until the connection-time limit query has completed."""
+        await asyncio.wait_for(self._limits_ready_event.wait(), timeout=timeout)
+
+    @property
+    def limits_error(self) -> str | None:
+        return self._limits_error
 
     async def stop(self) -> None:
         if self._limits_task:
@@ -366,26 +387,64 @@ class Robot:
     async def resume(self) -> None:
         await self._send_priority("!RESUME", timeout=2.0)
 
-    async def move_j(self, j: list[float], speed: Optional[float] = None) -> None:
+    def _clamp_speed(self, speed: Optional[float]) -> tuple[Optional[float], str]:
+        if speed is None:
+            return None, ""
+        caps = [v["speed"] for v in self._motion_limits.values()
+                if "speed" in v and v["speed"] > 0]
+        if not caps:
+            return speed, ""
+        applied = min([speed, *caps])
+        if applied < speed:
+            return applied, f"速度 {speed:g} 超过已保存上限，已按 {applied:g} 执行"
+        return speed, ""
+
+    def _prepare_cached_limit_command(self, command: str) -> str:
+        """Clamp manual motion/current commands using the connection snapshot."""
+        self.last_limit_warning = ""
+        self.last_applied_command = command
+        if command[:1] in "&@>":
+            parts = command.split(",")
+            if len(parts) >= 7:
+                try:
+                    requested = float(parts[-1])
+                except ValueError:
+                    return command
+                applied, warning = self._clamp_speed(requested)
+                if applied is not None and applied < requested:
+                    parts[-1] = f"{applied:g}"
+                    command = ",".join(parts)
+                    self.last_limit_warning = warning
+        elif command.upper().startswith("!HD_I "):
+            try:
+                requested = float(command.split(None, 1)[1])
+            except (IndexError, ValueError):
+                return command
+            limit = self._motion_limits.get(7, {}).get("i_limit")
+            if limit is not None and requested > limit:
+                command = f"!HD_I {limit:g}"
+                self.last_limit_warning = f"手爪电流 {requested:g} 超过已保存上限，已按 {limit:g} 执行"
+        self.last_applied_command = command
+        return command
+
+    async def move_j(self, j: list[float], speed: Optional[float] = None) -> dict:
         """``&j1..j6[,speed]`` — pass ``speed=None`` to use the firmware's current speed."""
         requested_speed = speed
-        self.last_limit_warning = ""
-        if speed is not None:
-            speed = min([speed] + [v["speed"] for v in self._motion_limits.values() if "speed" in v])
-            if requested_speed != speed:
-                self.last_limit_warning = f"速度 {requested_speed:g} 超过保存上限，已按 {speed:g} 执行"
-        await self._exec(P.cmd_move_j(j, speed), timeout=300.0)
+        speed, warning = self._clamp_speed(speed)
+        self.last_limit_warning = warning
+        command = P.cmd_move_j(j, speed)
+        self.last_applied_command = command
+        await self._exec(command, timeout=300.0)
         return {"requested_speed": requested_speed, "applied_speed": speed, "warning": self.last_limit_warning}
 
-    async def move_l(self, pose: list[float], speed: Optional[float] = None) -> None:
+    async def move_l(self, pose: list[float], speed: Optional[float] = None) -> dict:
         """``@x,y,z,a,b,c[,speed]`` — pass ``speed=None`` to use the firmware's current speed."""
         requested_speed = speed
-        self.last_limit_warning = ""
-        if speed is not None:
-            speed = min([speed] + [v["speed"] for v in self._motion_limits.values() if "speed" in v])
-            if requested_speed != speed:
-                self.last_limit_warning = f"速度 {requested_speed:g} 超过保存上限，已按 {speed:g} 执行"
-        await self._exec(P.cmd_move_l(pose, speed), timeout=300.0)
+        speed, warning = self._clamp_speed(speed)
+        self.last_limit_warning = warning
+        command = P.cmd_move_l(pose, speed)
+        self.last_applied_command = command
+        await self._exec(command, timeout=300.0)
         return {"requested_speed": requested_speed, "applied_speed": speed, "warning": self.last_limit_warning}
 
     async def hand_open(self) -> None:
@@ -444,6 +503,7 @@ class Robot:
             cmd = P.normalize_command(cmd)
         except ValueError as error:
             raise RobotError(str(error), P.ErrorCategory.BAD_ARGS) from error
+        cmd = self._prepare_cached_limit_command(cmd)
         if cmd in {"!STOP", "!PAUSE", "!RESUME"}:
             return await self._send_priority(cmd, timeout)
         if cmd in {"!DISABLE"}:
@@ -652,18 +712,28 @@ class Robot:
             raise RobotError(f"malformed HD_ZERO payload: {resp.rest!r}")
         return float(m.group(1)), float(m.group(2))
 
-    async def hand_current(self, amps: float) -> None:
+    async def hand_current(self, amps: float) -> dict:
         """``!HD_I <amps>`` — set gripper current limit (strict range 0 < amps ≤ 2)."""
         a = float(amps)
         if not (0.0 < a <= 2.0):
             raise RobotError(f"hand_current: amps must be in (0, 2.0], got {a}", P.ErrorCategory.BAD_ARGS)
+        self.last_limit_warning = ""
         # Firmware uses %f parse; trim trailing zeros for cleaner wire output
         s = f"{a:.3f}".rstrip('0').rstrip('.')
+        requested_amps = amps
         limit = self._motion_limits.get(7, {}).get("i_limit")
         if limit is not None:
             amps = min(amps, limit)
+            self.last_limit_warning = (
+                f"手爪电流 {requested_amps:g} 超过已保存上限，已按 {amps:g} 执行"
+                if amps < requested_amps else ""
+            )
         s = f"{amps:.6f}".rstrip('0').rstrip('.') or "0"
-        await self._exec(f"!HD_I {s}")
+        command = f"!HD_I {s}"
+        self.last_applied_command = command
+        await self._exec(command)
+        return {"requested_amps": float(requested_amps), "applied_amps": amps,
+                "warning": self.last_limit_warning}
 
     # ---- DCE tuning ----
     _DCE_KINDS = {"kp": "KP", "kv": "KV", "ki": "KI", "kd": "KD"}

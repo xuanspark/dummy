@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
-import { api, RobotWs, type CartPos, type ConnectionState, type JointPos, type PortInfo, type WsMessage } from '@/api/client'
+import { api, RobotWs, type CartPos, type ConnectionState, type JointPos, type MotionLimits, type PortInfo, type WsMessage } from '@/api/client'
 
 export interface LogEntry {
   id: number
@@ -24,6 +24,9 @@ export const useRobotStore = defineStore('robot', () => {
   const logs = ref<LogEntry[]>([])
   const dryRun = ref<boolean>(localStorage.getItem(DRY_RUN_KEY) === '1')
   const robotState = ref<'unknown' | 'normal' | 'estop' | 'paused' | 'stopped'>('unknown')
+  const motionLimits = ref<MotionLimits>({})
+  const limitsReady = ref(false)
+  const limitWarning = ref('')
   let logId = 0
 
   function stateLabel(state: string): string {
@@ -72,6 +75,9 @@ export const useRobotStore = defineStore('robot', () => {
       if (msg.jpos !== undefined) jpos.value = msg.jpos
       if (msg.lpos !== undefined) lpos.value = msg.lpos
       if (msg.speed !== undefined) speed.value = msg.speed
+      if (msg.motion_limits !== undefined) motionLimits.value = msg.motion_limits
+      if (msg.limits_ready !== undefined) limitsReady.value = msg.limits_ready
+      if (msg.limit_warning !== undefined) limitWarning.value = msg.limit_warning
       if (msg.connected !== undefined) {
         connection.value = {
           connected: msg.connected,
@@ -119,8 +125,17 @@ export const useRobotStore = defineStore('robot', () => {
   async function connect(port: string, baud: number) {
     pushLog(`正在连接 ${port} @ ${baud}…`, 'info')
     try {
-      connection.value = await api.connect(port, baud)
+      const result = await api.connect(port, baud)
+      connection.value = result
+      motionLimits.value = result.motion_limits || {}
+      limitsReady.value = result.limits_ready
+      limitWarning.value = result.limit_warning || ''
       pushLog('连接成功', 'ok')
+      if (result.limits_ready) {
+        pushLog('已读取设备运动限制，后续动作会自动提醒并限幅', 'info')
+      } else {
+        pushLog(result.limit_warning || '未读取到设备运动限制，动作仍由固件最终限幅', 'info')
+      }
       // Reconnect WS so it subscribes to the newly opened transport
       ws.close()
       ws.connect()
@@ -131,6 +146,9 @@ export const useRobotStore = defineStore('robot', () => {
   }
   async function disconnect() {
     connection.value = await api.disconnect()
+    motionLimits.value = {}
+    limitsReady.value = false
+    limitWarning.value = ''
     pushLog('已断开连接', 'info')
   }
   // Dry-run: synthesise the firmware acknowledgement that a real device would
@@ -179,6 +197,7 @@ export const useRobotStore = defineStore('robot', () => {
     pushLog(`→ ${cmd}`, 'tx')
     try {
       const r = await api.raw(cmd)
+      if (r.warning) pushLog(`限制提醒：${r.warning}`, 'info')
       pushLog(`← ${localizeFirmwareLine(r.raw)}`, r.ok ? 'ok' : 'err')
       return r
     } catch (e) {
@@ -218,6 +237,7 @@ export const useRobotStore = defineStore('robot', () => {
 
   return {
     ports, connection, defaults, jpos, lpos, speed, logs, dryRun, robotState,
+    motionLimits, limitsReady, limitWarning,
     isConnected,
     refreshPorts, refreshConnection, loadDefaults,
     connect, disconnect, sendRaw, sendMoveJoint,

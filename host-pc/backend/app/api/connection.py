@@ -48,7 +48,15 @@ async def connect(body: ConnectBody, mgr: ConnectionManager = Depends(get_manage
         raise HTTPException(status_code=400, detail=str(e)) from e
     except RuntimeError as e:
         raise HTTPException(status_code=409, detail=str(e)) from e
-    return {"connected": True, "port": mgr.port, "baud": mgr.baud}
+    robot = mgr.robot
+    return {
+        "connected": True,
+        "port": mgr.port,
+        "baud": mgr.baud,
+        "limits_ready": bool(robot and robot.limits_ready),
+        "motion_limits": robot._motion_limits if robot else {},
+        "limit_warning": robot.last_limit_warning if robot else "",
+    }
 
 
 @router.post("/disconnect")
