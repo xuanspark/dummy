@@ -202,29 +202,39 @@ bool ValidLimit(int parameter, float value)
 bool ReadLimits(CtrlStepMotor* const* motors, uint32_t first, uint32_t last, int parameter)
 {
     // 先一次性发出全部查询，再统一等待，避免每个节点和参数串行阻塞。
-    for (uint32_t n = first; n <= last; ++n) {
-        if (!motors[n]) continue;
-        for (int p = 0; p < 3; ++p) {
-            if (parameter >= 0 && parameter != p) continue;
-            motors[n]->QueryLimit(p);
-        }
-    }
-    const uint32_t deadline = HAL_GetTick() + 600;
-    while (HAL_GetTick() < deadline) {
+    const uint32_t deadline = HAL_GetTick() + 900;
+    for (uint32_t round = 0; round < 3; ++round) {
+        bool pending = false;
         bool complete = true;
         for (uint32_t n = first; n <= last; ++n) {
             if (!motors[n]) continue;
             for (int p = 0; p < 3; ++p) {
                 if (parameter >= 0 && parameter != p) continue;
                 if (!(motors[n]->limitReceivedMask & (1u << p))) {
+                    pending = true;
                     complete = false;
-                    break;
+                    if (!motors[n]->QueryLimit(p)) osDelay(2);
                 }
             }
-            if (!complete) break;
         }
         if (complete) return true;
-        osDelay(5);
+        if (!pending) return true;
+        const uint32_t waitDeadline = HAL_GetTick() + 250;
+        while (HAL_GetTick() < waitDeadline && HAL_GetTick() < deadline) {
+            complete = true;
+            for (uint32_t n = first; n <= last && complete; ++n) {
+                if (!motors[n]) continue;
+                for (int p = 0; p < 3; ++p) {
+                    if (parameter >= 0 && parameter != p) continue;
+                    if (!(motors[n]->limitReceivedMask & (1u << p))) {
+                        complete = false;
+                        break;
+                    }
+                }
+            }
+            if (complete) return true;
+            osDelay(5);
+        }
     }
     return false;
 }
