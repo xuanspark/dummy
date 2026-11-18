@@ -70,6 +70,7 @@ static bool failOffsetSend = false;
 static bool currentFinishedWithoutContact = false;
 static float handPosition = 0;
 static int32_t gains[8][4] = {};
+static float limits[8][3] = {};
 static std::vector<float> j1Targets;
 static std::vector<int> angleQueries;
 bool CanSendMessage(CAN_context*, uint8_t* data, CAN_TxHeaderTypeDef* header)
@@ -114,6 +115,18 @@ bool CanSendMessage(CAN_context*, uint8_t* data, CAN_TxHeaderTypeDef* header)
         }
     }
     if (command >= 0x17 && command <= 0x1a && node) memcpy(&gains[node][command - 0x17], data, 4);
+    if (command >= 0x12 && command <= 0x14 && node) {
+        float value; memcpy(&value, data, 4);
+        const int parameter = command == 0x14 ? 0 : command == 0x13 ? 1 : 2;
+        limits[node][parameter] = value;
+    }
+    if (command >= 0x2c && command <= 0x2e && node) {
+        float configured = limits[node][command - 0x2c];
+        float applied = configured;
+        memcpy(data, &configured, 4);
+        memcpy(data + 4, &applied, 4);
+        dummy.motorJ[node]->LimitCallback(command - 0x2c, configured, applied);
+    }
     if (command >= 0x27 && command <= 0x2a && node && command != missingParameter)
         dummy.motorJ[node]->DceParamCallback(command, gains[node][command - 0x27]);
     if (command == 0x2b && node) dummy.motorJ[node]->ConfigSavedCallback(!failSave);
@@ -246,6 +259,14 @@ int main()
         Require(dummy.IsEnabled() && dummy.hand2->isEnabled(), "hand_enable_command");
         Send("#SETPID 7 101 202 303 404"); ProcessAsciiCommand(0);
         Require(usb.text.find("SetPid OK") != std::string::npos && gains[7][0] == 101 && gains[7][1] == 404 && gains[7][2] == 202 && gains[7][3] == 303, "pidv_all_order_and_hand");
+        Send("#SETLIMIT 5 12 8 1.2"); ProcessAsciiCommand(0);
+        Require(usb.text.find("SetLimit OK node=5") != std::string::npos &&
+                fabsf(dummy.motorJ[5]->limits[0] - 12) < 0.001f &&
+                fabsf(dummy.motorJ[5]->limits[1] - 8) < 0.001f &&
+                fabsf(dummy.motorJ[5]->limits[2] - 1.2f) < 0.001f,
+                "motion_limit_group_save_and_readback");
+        Send("#GETLIMIT 5 SPEED"); ProcessAsciiCommand(0);
+        Require(usb.text.find("LIMIT NODE:5 SPEED:8") != std::string::npos, "motion_limit_query");
         Send("#SETPID 1 kv 99"); ProcessAsciiCommand(0);
         Require(gains[1][1] == 99, "pidv_single");
         missingParameter = 0x29;

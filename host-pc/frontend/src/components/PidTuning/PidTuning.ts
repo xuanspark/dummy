@@ -66,8 +66,8 @@ export default defineComponent({
     }
     async function setLimit(kind: MotionKind) {
       const value = Number(limits[kind])
-      if (!limits[kind].trim() || !Number.isFinite(value) || value < 0) {
-        ElMessage.warning('限制值必须为非负的有限数')
+      if (!limits[kind].trim() || !Number.isFinite(value) || value <= 0) {
+        ElMessage.warning('限制值必须为大于 0 的有限数')
         return
       }
       await execute(`设置节点 ${node.value} 的限制`, () => api.setMotionLimit(node.value, kind, value))

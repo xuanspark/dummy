@@ -270,6 +270,7 @@ COMMAND_TAGS: dict[str, str] = {
     "#GETSPEED":      "GetSpeed",
     "#ONLINE":        "Online",
     "#GET_DCE":       "GetDce",
+    "#GETLIMIT":      "GetLimit",
     "#SETPID":        "SetPid",
     "SETPID":         "SetPid",
     "#GETPID":        "GetPid",

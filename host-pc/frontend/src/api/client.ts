@@ -87,7 +87,7 @@ export const api = {
   // speed === undefined  → omit (firmware uses its current speed; 6-arg wire form)
   // speed === number     → override speed for this move (7-arg wire form)
   moveJoint: (joints: number[], speed?: number) =>
-    http.post('/api/move/joint', speed == null ? { joints } : { joints, speed }, { timeout: 0 })
+    http.post<{ ok: boolean; requested_speed?: number; applied_speed?: number; warning?: string }>('/api/move/joint', speed == null ? { joints } : { joints, speed }, { timeout: 0 })
       .then((r) => r.data),
   moveCart: (pose: number[], speed?: number) =>
     http.post('/api/move/cart', speed == null ? { pose } : { pose, speed }, { timeout: 0 })
@@ -127,6 +127,9 @@ export const api = {
     http.post<{ ok: boolean; tag: string; rest: string; raw: string }>(
       '/api/motion/limit', { node, kind, value },
     ).then((r) => r.data),
+  getMotionLimits: (node?: number) =>
+    http.get<{ limits: Record<string, Record<string, number>> }>('/api/motion/limit', { params: node == null ? {} : { node } })
+      .then((r) => r.data),
 
   // ---------- rgb ----------
   rgbOn: () => http.post('/api/rgb/on').then((r) => r.data),

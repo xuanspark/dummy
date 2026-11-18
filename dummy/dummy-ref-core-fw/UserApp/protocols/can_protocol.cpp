@@ -39,6 +39,13 @@ void OnCanMessage(CAN_context* canCtx, CAN_RxHeaderTypeDef* rxHeader, uint8_t* d
             return;
         }
 
+        if (cmd >= 0x2c && cmd <= 0x2e) {
+            if (rxHeader->DLC != 8 || !dummy.motorJ[id]) { ++dummy.canDroppedFrames; return; }
+            float configured, applied;
+            memcpy(&configured, data, 4); memcpy(&applied, data + 4, 4);
+            dummy.motorJ[id]->LimitCallback(cmd - 0x2c, configured, applied);
+            return;
+        }
         // id == 7：手爪节点
         if (id == 7)
         {

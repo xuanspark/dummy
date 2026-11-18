@@ -9,6 +9,8 @@
 #include "common_inc.h"
 #include "configurations.h"
 #include <can.h>
+#include <cmath>
+#include <cstring>
 
 
 extern Motor motor;
@@ -27,6 +29,26 @@ CAN_TxHeaderTypeDef txHeader =
 
 void OnCanCmd(uint8_t _cmd, uint8_t* _data, uint32_t _len)
 {
+    if (_len != 8) return;
+    // 位模式检查不受 Release 快速数学优化影响。
+    auto finite = [](float value) {
+        uint32_t bits; std::memcpy(&bits, &value, 4);
+        return (bits & 0x7f800000u) != 0x7f800000u;
+    };
+    float input = 0, second = 0;
+    std::memcpy(&input, _data, 4);
+    std::memcpy(&second, _data + 4, 4);
+    if (_cmd >= 0x03 && _cmd <= 0x07) {
+        if (!finite(input)) return;
+        const float bound = _cmd == 0x03 ? 3.3f : (_cmd == 0x04 ? 30.0f : 40000.0f);
+        if (input < -bound || input > bound) return;
+        if ((_cmd == 0x06 || _cmd == 0x07) && (!finite(second) || second <= 0 || second > 40000)) return;
+    }
+    if (_cmd >= 0x12 && _cmd <= 0x14) {
+        const float maximum = _cmd == 0x12 ? 3.3f : (_cmd == 0x13 ? 30.0f : 1000.0f);
+        const float minimum = _cmd == 0x14 ? 1.0f / 51200.0f : 0.0f;
+        if (!finite(input) || input < minimum || input > maximum) return;
+    }
     float tmpF;
     int32_t tmpI;
 
@@ -98,8 +120,8 @@ void OnCanCmd(uint8_t _cmd, uint8_t* _data, uint32_t _len)
                 motor.config.motionParams.ratedVelocity = boardConfig.velocityLimit;
                 motor.controller->SetCtrlMode(Motor::MODE_COMMAND_POSITION);
             }
-            motor.config.motionParams.ratedVelocity =
-                (int32_t) (*(float*) (RxData + 4) * (float) motor.MOTOR_ONE_CIRCLE_SUBDIVIDE_STEPS);
+            motor.config.motionParams.ratedVelocity = (int32_t) fminf(
+                second * motor.MOTOR_ONE_CIRCLE_SUBDIVIDE_STEPS, (float) boardConfig.velocityLimit);
             motor.controller->SetPositionSetPoint(
                 (int32_t) (*(float*) RxData * (float) motor.MOTOR_ONE_CIRCLE_SUBDIVIDE_STEPS));
             // Always Need Position & Finished ACK
@@ -140,10 +162,11 @@ void OnCanCmd(uint8_t _cmd, uint8_t* _data, uint32_t _len)
             tmpF *= (float) motor.MOTOR_ONE_CIRCLE_SUBDIVIDE_STEPS;
             if (tmpF < 1.0f)
                 break;
+            if (_data[4]) boardConfig.velocityAcc = (int32_t) tmpF;
+            tmpF = fminf(tmpF, (float) boardConfig.velocityAcc);
             motor.config.motionParams.ratedVelocityAcc = (int32_t) tmpF;
             motor.motionPlanner.velocityTracker.SetVelocityAcc(motor.config.motionParams.ratedVelocityAcc);
             motor.motionPlanner.positionTracker.SetVelocityAcc(motor.config.motionParams.ratedVelocityAcc);
-            boardConfig.velocityAcc = motor.config.motionParams.ratedVelocityAcc;
             if (_data[4])
                 boardConfig.configStatus = CONFIG_COMMIT;
             break;
@@ -252,6 +275,22 @@ void OnCanCmd(uint8_t _cmd, uint8_t* _data, uint32_t _len)
         }
             break;
 
+        case 0x2c:
+        case 0x2d:
+        case 0x2e:
+        {
+            // 前四字节为保存配置，后四字节为当前运行值。
+            const float scale = _cmd == 0x2e ? 1000.0f : (float) motor.MOTOR_ONE_CIRCLE_SUBDIVIDE_STEPS;
+            float configured = (_cmd == 0x2c ? boardConfig.velocityAcc :
+                (_cmd == 0x2d ? boardConfig.velocityLimit : boardConfig.currentLimit)) / scale;
+            float applied = (_cmd == 0x2c ? motor.config.motionParams.ratedVelocityAcc :
+                (_cmd == 0x2d ? motor.config.motionParams.ratedVelocity : motor.config.motionParams.ratedCurrent)) / scale;
+            std::memcpy(_data, &configured, 4);
+            std::memcpy(_data + 4, &applied, 4);
+            txHeader.StdId = (boardConfig.canNodeId << 7) | _cmd;
+            CAN_Send(&txHeader, _data);
+            break;
+        }
         case 0x2b:
             // 仅在主循环完成 EEPROM 写入后确认落盘。
             _data[0] = boardConfig.configStatus == CONFIG_OK ? 1 : 0;

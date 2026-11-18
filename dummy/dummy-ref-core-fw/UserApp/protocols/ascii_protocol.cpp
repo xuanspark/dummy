@@ -41,6 +41,7 @@ const char* Tag(const char* command)
         {"#GETJPOS", "GetJPos"}, {"#GETLPOS", "GetLPos"}, {"#GETSPEED", "GetSpeed"},
         {"#STATUS", "Status"}, {"#ONLINE", "Online"}, {"#GET_DCE", "GetDce"},
         {"#GETPID", "GetPid"}, {"GETPID", "GetPid"}, {"#SETPID", "SetPid"}, {"SETPID", "SetPid"},
+        {"#GETLIMIT", "GetLimit"}, {"#SETLIMIT", "SetLimit"}, {"#GETCMDMODE", "GetCmdMode"},
         {"#SET_DCE_KP", "SetDceKp"}, {"#SET_DCE_KI", "SetDceKi"}, {"#SET_DCE_KD", "SetDceKd"}, {"#SET_DCE_KV", "SetDceKv"},
         {"#OFFSET_J", "OffsetJ"}, {"#CMDMODE", "CmdMode"}, {"#REBOOT", "Reboot"},
         {"#ACC_J", "AccJ"}, {"#SPEED_J", "SpeedJ"}, {"#I_LIMIT_J", "ILimitJ"}, {"!CALIBRATION", "Calibration"},
@@ -52,7 +53,7 @@ bool Query(const char* command)
 {
     return Is(command, "#GETJPOS") || Is(command, "#GETLPOS") || Is(command, "#GETSPEED") ||
         Is(command, "#STATUS") || Is(command, "#ONLINE") || Is(command, "#GET_DCE") ||
-        Is(command, "#GETPID") || Is(command, "GETPID");
+        Is(command, "#GETPID") || Is(command, "GETPID") || Is(command, "#GETLIMIT") || Is(command, "#GETCMDMODE");
 }
 bool Action(const char* command)
 {
@@ -77,7 +78,8 @@ bool Number(const char* token, float& value)
     if (!token[0]) return false;
     char* end;
     value = strtof(token, &end);
-    return !*end && std::isfinite(value);
+    uint32_t bits; memcpy(&bits, &value, 4);
+    return !*end && (bits & 0x7f800000u) != 0x7f800000u;
 }
 int Tokens(char* text, char* tokens[], int maximum)
 {
@@ -181,6 +183,31 @@ bool Saved(CtrlStepMotor* motor)
     }
     return false;
 }
+const char* const limitNames[] = {"ACC", "SPEED", "CURRENT"};
+int LimitParameter(const char* text)
+{
+    char key[16] = {};
+    if (strlen(text) >= sizeof(key)) return -1;
+    for (size_t i = 0; text[i]; ++i) key[i] = toupper(static_cast<unsigned char>(text[i]));
+    for (int p = 0; p < 3; ++p) if (!strcmp(key, limitNames[p])) return p;
+    if (!strcmp(key, "I_LIMIT")) return 2;
+    return -1;
+}
+bool ValidLimit(int parameter, float value)
+{
+    const float minimum[] = {1.0f / 51200.0f, 0, 0.001f};
+    const float maximum[] = {1000, 30, 3.3f};
+    return parameter >= 0 && parameter < 3 && value >= minimum[parameter] && value <= maximum[parameter];
+}
+bool ReadLimit(CtrlStepMotor* motor, int parameter)
+{
+    if (!motor->QueryLimit(parameter)) return false;
+    for (int wait = 0; wait < 50; ++wait) {
+        if (motor->limitReceivedMask & (1u << parameter)) return true;
+        osDelay(10);
+    }
+    return false;
+}
 
 void Execute(const Message& message)
 {
@@ -200,7 +227,29 @@ void Execute(const Message& message)
     uint32_t node = 0;
     if (count >= 2) Unsigned(arguments[1], node);
     if (query) {
-        if (!strcmp(command, "#STATUS")) {
+        if (!strcmp(command, "#GETCMDMODE")) {
+            if (count != 1) { Respond(output, "GetCmdMode Error: bad_args"); return; }
+            Respond(output, "GetCmdMode OK MODE:%u NAME:%s RATIO:%.2f STATE:%s", dummy.commandMode,
+                dummy.ModeName(), dummy.SpeedRatio(), dummy.StateName());
+        } else if (!strcmp(command, "#GETLIMIT")) {
+            bool all = count == 1 || (count == 2 && (!strcmp(arguments[1], "all") || !strcmp(arguments[1], "ALL")));
+            int parameter = count == 3 ? LimitParameter(arguments[2]) : -1;
+            if (count > 3 || (!all && (node < 1 || node > 7)) || (count == 3 && parameter < 0)) {
+                Respond(output, "GetLimit Error: bad_args"); return;
+            }
+            Respond(output, "GetLimit Begin STATE:%s", dummy.StateName());
+            bool complete = true;
+            for (uint32_t n = all ? 1 : node; n <= (all ? 7 : node); ++n) {
+                for (int p = 0; p < 3; ++p) if (parameter < 0 || parameter == p) {
+                    auto* motor = dummy.motorJ[n];
+                    if (ReadLimit(motor, p)) Respond(output, "LIMIT NODE:%lu %s:%.6f APPLIED:%.6f", n, limitNames[p],
+                        motor->limits[p], motor->appliedLimits[p]);
+                    else { complete = false; Respond(output, "LIMIT NODE:%lu %s:NL", n, limitNames[p]); }
+                }
+            }
+            if (complete) Respond(output, "GetLimit End");
+            else Respond(output, "GetLimit Error: read_failed state=%s", dummy.StateName());
+        } else if (!strcmp(command, "#STATUS")) {
             Respond(output, "Status OK STATE:%s CAN_RX:%lu CAN_DROP:%lu", dummy.StateName(), dummy.canRxTotal, dummy.canDroppedFrames);
             Respond(output, "FW:%s BUILD:%s %s", CONFIG_FW_VERSION_TEXT, __DATE__, __TIME__);
             const auto fault = dummy.motionFault;
@@ -297,8 +346,37 @@ void Execute(const Message& message)
     if (!strcmp(command, "!HD_I") && count == 2) {
         float current;
         if (Number(arguments[1], current) && current > 0 && current <= 2) {
-            dummy.hand2->current = current; Respond(output, "HD_I OK current=%.2f", current); return;
+            if (!ReadLimit(dummy.hand2, 2)) { Respond(output, "HD_I Error: read_failed"); return; }
+            if (dummy.robotState != DummyRobot::STATE_NORMAL) { Respond(output, "HD_I Error: state=%s", dummy.StateName()); return; }
+            dummy.hand2->current = fminf(current, dummy.hand2->limits[2]);
+            Respond(output, "HD_I OK current=%.3f", dummy.hand2->current); return;
         }
+    }
+    const bool setLimit = !strcmp(command, "#SETLIMIT");
+    int legacyLimit = !strcmp(command, "#ACC_J") ? 0 : !strcmp(command, "#SPEED_J") ? 1 : !strcmp(command, "#I_LIMIT_J") ? 2 : -1;
+    if (setLimit || legacyLimit >= 0) {
+        int first = -1; float values[3] = {}; bool valid = node >= 1 && node <= 7;
+        if (setLimit && count == 5) {
+            for (int p = 0; p < 3; ++p)
+                valid = Number(arguments[p + 2], values[p]) && ValidLimit(p, values[p]) && valid;
+        } else if ((setLimit && count == 4) || (legacyLimit >= 0 && count == 3)) {
+            first = setLimit ? LimitParameter(arguments[2]) : legacyLimit;
+            valid = first >= 0 && valid;
+            if (first >= 0) valid = Number(arguments[count - 1], values[first]) && ValidLimit(first, values[first]) && valid;
+        } else valid = false;
+        if (!valid) { Respond(output, "%s Error: bad_args", tag); return; }
+        auto* motor = dummy.motorJ[node];
+        for (int p = 0; p < 3; ++p) if (first < 0 || first == p) {
+            if (dummy.robotState != DummyRobot::STATE_NORMAL) { Respond(output, "%s Error: state=%s", tag, dummy.StateName()); return; }
+            if (!motor->SetLimit(p, values[p])) { Respond(output, "%s Error: send_failed", tag); return; }
+            if (!Saved(motor)) { Respond(output, "%s Error: save_failed state=%s", tag, dummy.StateName()); return; }
+            if (!ReadLimit(motor, p) || fabsf(motor->limits[p] - values[p]) > (p == 2 ? 0.0011f : 0.00003f)) {
+                Respond(output, "%s Error: verify_failed", tag); return;
+            }
+        }
+        if (dummy.robotState != DummyRobot::STATE_NORMAL) { Respond(output, "%s Error: state=%s", tag, dummy.StateName()); return; }
+        dummy.ApplyModeAcceleration();
+        Respond(output, "%s OK node=%lu saved=1 verified=1", tag, node); return;
     }
     bool setPid = !strcmp(command, "#SETPID") || !strcmp(command, "SETPID");
     bool legacyPid = strncmp(command, "#SET_DCE_", 9) == 0;
@@ -441,6 +519,7 @@ void Receive(const char* input, size_t length, StreamSink& baseOutput)
         uint32_t space = dummy.commandHandler.Push(command, output.channelType, message.request);
         if (space == 0xfd) Respond(output, "%s Error: not_enabled", tag);
         else if (space == 0xfc) Respond(output, "%s Error: busy", tag);
+        else if (space == 0xfa) Respond(output, "%s Replaced MODE:2", tag);
         else if (space == 0xfe) Respond(output, "%s Error: state=%s", tag, dummy.StateName());
         else if (space >= 0xfb) Respond(output, "%s Error: queue_full", tag);
         else Respond(output, "%s Accepted Q:%lu", tag, 16 - space);

@@ -108,7 +108,7 @@ void DummyRobot::ApplyEmergencyBrake()
 }
 bool DummyRobot::CanTransmit(uint8_t command, const uint8_t* data) const
 {
-    if (command >= 0x20 && command <= 0x2b) return true;
+    if (command >= 0x20 && command <= 0x2e) return true;
     if (robotState == STATE_EMERGENCY_STOP) {
         if (command == 0x01 && restoreEnablePending) {
             uint32_t enabled = 0;
@@ -315,20 +315,21 @@ bool DummyRobot::EnsureHomed() { return IsEnabled() && (isHomed || Homing()); }
 
 bool DummyRobot::MoveJ(float j1, float j2, float j3, float j4, float j5, float j6)
 {
-    if (!IsEnabled() || !std::isfinite(jointSpeed) || jointSpeed <= 0)
+    if (commandMode == COMMAND_MOTOR_TUNING || !IsEnabled() || !std::isfinite(jointSpeed) || jointSpeed <= 0)
         return false;
     DOF6Kinematic::Joint6D_t target(j1, j2, j3, j4, j5, j6);
     float maximumTime = 0;
+    const float modeSpeed = jointSpeed * jointSpeedRatio;
     for (int n = 1; n <= 6; ++n) {
         float value = target.a[n - 1];
         if (!std::isfinite(value) || value < motorJ[n]->angleLimitMin || value > motorJ[n]->angleLimitMax)
             return false;
-        maximumTime = fmaxf(maximumTime, fabsf(value - currentJoints.a[n - 1]) * motorJ[n]->reduction / jointSpeed);
+        maximumTime = fmaxf(maximumTime, fabsf(value - currentJoints.a[n - 1]) * motorJ[n]->reduction / modeSpeed);
     }
     for (int n = 1; n <= 6; ++n) {
         float distance = fabsf(target.a[n - 1] - currentJoints.a[n - 1]);
         dynamicJointSpeeds.a[n - 1] = maximumTime > 0.0001f ?
-            fmaxf(0.01f, distance * motorJ[n]->reduction / maximumTime * 0.1f) : 0.01f;
+            fmaxf(0.01f, distance * motorJ[n]->reduction / maximumTime * 0.1f * jointSpeedRatio) : 0.01f;
     }
     targetJoints = target;
     pendingResumeTarget = target;
@@ -395,6 +396,7 @@ bool DummyRobot::RunPose(const DOF6Kinematic::Joint6D_t& pose, float speed)
     uint32_t sequences[6];
     for (int n = 1; n <= 6; ++n) sequences[n - 1] = motorJ[n]->angleSequence;
     SetJointSpeed(speed);
+    DOF6Kinematic::Joint6D_t activePose = pose;
     if (!MoveJ(pose.a[0], pose.a[1], pose.a[2], pose.a[3], pose.a[4], pose.a[5])) {
         jointSpeed = previousSpeed;
         return false;
@@ -402,13 +404,22 @@ bool DummyRobot::RunPose(const DOF6Kinematic::Joint6D_t& pose, float speed)
     armMotionActive = true;
     uint32_t activeTime = 0;
     for (;;) {
+        if (commandMode == COMMAND_TARGET_POINT_INTERRUPTABLE) {
+            bool changed = false;
+            for (int n = 0; n < 6; ++n) if (fabsf(targetJoints.a[n] - activePose.a[n]) > 0.001f) changed = true;
+            if (changed) {
+                activePose = targetJoints;
+                activeTime = 0;
+                for (int n = 1; n <= 6; ++n) sequences[n - 1] = motorJ[n]->angleSequence;
+            }
+        }
         if (robotState == STATE_EMERGENCY_STOP || seenStop != stopEpoch) {
             while (robotState != STATE_NORMAL) osDelay(5);
             seenStop = stopEpoch;
             // 急停期间不计入动作超时；恢复后从零开始统计本次实际执行时间。
             activeTime = 0;
             SetJointSpeed(speed);
-            if (!MoveJ(pose.a[0], pose.a[1], pose.a[2], pose.a[3], pose.a[4], pose.a[5])) break;
+            if (!MoveJ(activePose.a[0], activePose.a[1], activePose.a[2], activePose.a[3], activePose.a[4], activePose.a[5])) break;
             for (int n = 1; n <= 6; ++n) sequences[n - 1] = motorJ[n]->angleSequence;
         }
         MoveJoints(targetJoints);
@@ -418,7 +429,7 @@ bool DummyRobot::RunPose(const DOF6Kinematic::Joint6D_t& pose, float speed)
         for (int n = 1; n <= 6; ++n) {
             auto* motor = motorJ[n];
             if (motor->angleSequence == sequences[n - 1] || HAL_GetTick() - motor->lastAngleTick > 250 ||
-                fabsf(currentJoints.a[n - 1] - pose.a[n - 1]) > 0.5f || motor->state != CtrlStepMotor::FINISH) {
+                fabsf(currentJoints.a[n - 1] - activePose.a[n - 1]) > 0.5f || motor->state != CtrlStepMotor::FINISH) {
                 complete = false;
                 failedNode = n;
                 failure = motor->angleSequence == sequences[n - 1] || HAL_GetTick() - motor->lastAngleTick > 250 ?
@@ -433,7 +444,7 @@ bool DummyRobot::RunPose(const DOF6Kinematic::Joint6D_t& pose, float speed)
         }
         if ((!IsEnabled() || activeTime >= 120000) &&
             TryMotionFault(IsEnabled() ? failure : "arm_disabled", failedNode,
-                           pose.a[failedNode - 1] - currentJoints.a[failedNode - 1], seenStop)) break;
+                           activePose.a[failedNode - 1] - currentJoints.a[failedNode - 1], seenStop)) break;
         osDelay(10);
         activeTime += 10;
     }
@@ -511,6 +522,15 @@ uint32_t DummyRobot::CommandHandler::Push(const std::string& command, uint8_t ch
         bool busy = context->maintenanceActive;
         __set_PRIMASK(mask);
         return busy ? 0xfc : 0xfe;
+    }
+    // 模式 2 在当前动作执行期间直接替换目标，不再把过期目标排到队尾。
+    if (context->commandMode == COMMAND_TARGET_POINT_INTERRUPTABLE && context->taskActive &&
+        !command.empty() && command[0] == '&') {
+        float values[6] = {};
+        int count = sscanf(command.c_str() + 1, "%f,%f,%f,%f,%f,%f", values, values + 1, values + 2,
+                           values + 3, values + 4, values + 5);
+        if (count == 6 && context->MoveJ(values[0], values[1], values[2], values[3], values[4], values[5]))
+            return 0xfa;
     }
     ++context->scheduledActions;
     auto status = osMessageQueuePut(commandFifo, &message, 0, 0);
@@ -623,8 +643,22 @@ void DummyRobot::SetCommandMode(uint32_t mode)
 {
     if (mode < 1 || mode > 4 || taskActive) return;
     commandMode = static_cast<CommandMode>(mode);
-    // 所有模式使用同一 FIFO 完成屏障，保证暂停和恢复不会覆盖尚未完成的目标。
-    SetJointAcceleration(mode == COMMAND_CONTINUES_TRAJECTORY ? DEFAULT_JOINT_ACCELERATION_HIGH : DEFAULT_JOINT_ACCELERATION_LOW);
+    jointSpeedRatio = mode == COMMAND_CONTINUES_TRAJECTORY ? 0.3f : 1.0f;
+    ApplyModeAcceleration();
+}
+const char* DummyRobot::ModeName() const
+{
+    switch (commandMode) {
+        case COMMAND_TARGET_POINT_SEQUENTIAL: return "顺序点位";
+        case COMMAND_TARGET_POINT_INTERRUPTABLE: return "可中断点位";
+        case COMMAND_CONTINUES_TRAJECTORY: return "连续轨迹";
+        case COMMAND_MOTOR_TUNING: return "电机调参";
+        default: return "未知";
+    }
+}
+void DummyRobot::ApplyModeAcceleration()
+{
+    SetJointAcceleration(commandMode == COMMAND_CONTINUES_TRAJECTORY ? DEFAULT_JOINT_ACCELERATION_HIGH : DEFAULT_JOINT_ACCELERATION_LOW);
 }
 void DummyRobot::PollJointAngle()
 {

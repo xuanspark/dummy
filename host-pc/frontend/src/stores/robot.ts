@@ -205,7 +205,8 @@ export const useRobotStore = defineStore('robot', () => {
     }
     pushLog(`→ ${cmd}`, 'tx')
     try {
-      await api.moveJoint(joints, speedDeg)
+      const result = await api.moveJoint(joints, speedDeg)
+      if (result.warning) pushLog(`限制提醒：${result.warning}`, 'info')
     } catch (e) {
       pushLog(`关节运动失败：${(e as Error).message}`, 'err')
       throw e

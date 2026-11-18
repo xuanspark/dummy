@@ -50,8 +50,15 @@ public:
     void SetPositionSetPoint(float _val);
     void SetPositionWithVelocityLimit(float _pos, float _vel);
     void SetNodeID(uint32_t _id);
-    void SetCurrentLimit(float _val);
-    void SetVelocityLimit(float _val);
+    bool SetCurrentLimit(float _val);
+    bool SetVelocityLimit(float _val);
+    bool SaveAcceleration(float value);
+    bool SetLimit(uint8_t parameter, float value);
+    bool QueryLimit(uint8_t parameter);
+    void LimitCallback(uint8_t parameter, float configured, float applied);
+    volatile uint8_t limitReceivedMask = 0;
+    volatile float limits[3] = {};
+    volatile float appliedLimits[3] = {};
     void SetAcceleration(float _val);
     void SetDceKp(int32_t _val);
     void SetDceKv(int32_t _val);

@@ -141,9 +141,9 @@ const cmdModeBusy = ref(false)
 // Firmware commandMode numeric values (see DummyRobot::CommandMode / main.cpp OLED)
 const CMD_MODES: Array<{ value: number; label: string }> = [
   { value: 1, label: '1：顺序模式' },
-  { value: 2, label: '2：默认队列模式' },
-  { value: 3, label: '3：轨迹参数模式' },
-  { value: 4, label: '4：电机调试模式' },
+  { value: 2, label: '2：可中断点位（新目标替换）' },
+  { value: 3, label: '3：连续轨迹（30%速度比例）' },
+  { value: 4, label: '4：电机调参（不执行普通运动）' },
 ]
 const cmdMode = ref<number>(2)
 
@@ -307,7 +307,7 @@ async function runCmdMode() {
       <div class="maint-row">
         <div class="maint-label">
           <div class="maint-name">命令模式</div>
-          <div class="maint-hint"><code>#CMDMODE</code>：各模式均使用统一队列，支持急停、暂停和恢复。</div>
+          <div class="maint-hint"><code>#CMDMODE</code>：1 顺序完成，2 可替换目标，3 连续轨迹策略，4 仅调参；所有模式支持急停、暂停和恢复。</div>
         </div>
         <el-select v-model="cmdMode" size="small" style="width: 240px">
           <el-option

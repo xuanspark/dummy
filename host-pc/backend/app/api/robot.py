@@ -89,7 +89,7 @@ class PidBody(BaseModel):
 class MotionLimitBody(BaseModel):
     node: int = Field(..., ge=1, le=7)
     kind: str = Field(..., pattern="^(acc|speed|i_limit|ACC|SPEED|I_LIMIT)$")
-    value: float = Field(..., ge=0.0)
+    value: float = Field(..., gt=0.0, allow_inf_nan=False)
 
 
 # ---------- helper ----------
@@ -172,14 +172,14 @@ async def resume(r: Robot = Depends(get_robot)):
 
 @router.post("/move/joint")
 async def move_joint(body: JointMove, r: Robot = Depends(get_robot)):
-    await _run(r.move_j(body.joints, body.speed))
-    return {"ok": True}
+    result = await _run(r.move_j(body.joints, body.speed))
+    return {"ok": True, **(result or {})}
 
 
 @router.post("/move/cart")
 async def move_cart(body: CartMove, r: Robot = Depends(get_robot)):
-    await _run(r.move_l(body.pose, body.speed))
-    return {"ok": True}
+    result = await _run(r.move_l(body.pose, body.speed))
+    return {"ok": True, **(result or {})}
 
 
 # ---------- queries ----------
@@ -210,6 +210,9 @@ async def state_full(r: Robot = Depends(get_robot)):
         "lpos": s.last_lpos.__dict__ if s.last_lpos else None,
         "speed": s.last_speed,
         "motion_state": s.motion_state,
+        "limits_ready": r.limits_ready,
+        "motion_limits": r._motion_limits,
+        "limit_warning": r.last_limit_warning,
     }
 
 
@@ -417,6 +420,13 @@ async def motion_limit(body: MotionLimitBody, r: Robot = Depends(get_robot)):
     """Set per-joint acceleration / velocity / current limit (1..7)."""
     resp = await _run(r.set_motion_limit(body.node, body.kind, body.value))
     return {"ok": resp.ok, "tag": resp.tag, "rest": resp.rest, "raw": resp.raw}
+
+
+@router.get("/motion/limit")
+async def motion_limits(node: Optional[int] = None, r: Robot = Depends(get_robot)):
+    if node is not None and not (1 <= node <= 7):
+        raise HTTPException(status_code=422, detail="node must be 1..7")
+    return {"limits": await _run(r.get_motion_limits(node))}
 
 
 # ---------- escape hatch ----------

@@ -476,7 +476,7 @@ bool Motor::Controller::SetPositionSetPointWithTime(int32_t _pos, float _time)
                                        (float) context->config.motionParams.ratedVelocityAcc));
         vMax /= 2;
 
-        context->config.motionParams.ratedVelocity = (int32_t) vMax;
+        context->config.motionParams.ratedVelocity = (int32_t) fminf(vMax, (float) boardConfig.velocityLimit);
         SetPositionSetPoint(_pos);
 
         return true;

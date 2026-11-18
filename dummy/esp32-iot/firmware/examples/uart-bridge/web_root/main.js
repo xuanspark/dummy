@@ -99,6 +99,7 @@ const App = function(props) {
   const [cartIn, setCartIn] = useState({x:'0', y:'0', z:'0', a:'0', b:'0', c:'0'});
   const [tuneNode, setTuneNode] = useState('1');
   const [tuneVals, setTuneVals] = useState({kp:'', kv:'', ki:'', kd:'', acc:'', speed:'', iLimit:''});
+  const motionLimitsRef = useRef({});
   const [diagNode, setDiagNode] = useState('all');
   const [cmdModeVal, setCmdModeVal] = useState('0');
   const [ws, setWs] = useState(null);
@@ -123,6 +124,7 @@ const App = function(props) {
         setConnected(true);
         setWs(sock);
         wsRef.current = sock;
+        sock.send('#GETLIMIT all\n');
       };
       sock.onmessage = ev => {
         // STM32 以 \r\n 终结每行；一次 onmessage 可能含多行
@@ -209,6 +211,11 @@ const App = function(props) {
     // 速度: "GetSpeed OK SPEED:45.00" 或子串 "SPEED:..."
     var spMatch = line.match(/SPEED:([\-\d.]+)/);
     if (spMatch) setCurSpeed(parseFloat(spMatch[1]));
+    var limitMatch = line.match(/^LIMIT NODE:(\d+) (ACC|SPEED|CURRENT):([0-9.+-eE]+)/);
+    if (limitMatch) {
+      var lk = {ACC:'acc', SPEED:'speed', CURRENT:'iLimit'}[limitMatch[2]];
+      motionLimitsRef.current[limitMatch[1]] = Object.assign({}, motionLimitsRef.current[limitMatch[1]], {[lk]: parseFloat(limitMatch[3])});
+    }
 
     // 队列入队成功: "Move OK Q:15"
     var qMatch = line.match(/Q:(\d+)/);
@@ -355,7 +362,12 @@ const App = function(props) {
   const sendJointPos = () => {
     var offs = lastOffsetsRef.current;
     var abs  = offs.map((o, i) => (isFinite(o) ? o : 0) + HOME[i]);
-    wsSend('&' + abs.join(',') + ',' + velocity);
+    var speed = parseFloat(velocity);
+    var speedLimits = Object.keys(motionLimitsRef.current).map(k => motionLimitsRef.current[k].speed).filter(Number.isFinite);
+    if (speedLimits.length && speed < parseFloat(velocity)) {
+      queueMessage({data: '限制提醒：速度已按已保存上限调整为 ' + speed, uart: false, type: 'reject'});
+    }
+    wsSend('&' + abs.join(',') + ',' + speed);
   };
 
   const resetAllJoints = ev => {
@@ -407,7 +419,15 @@ const App = function(props) {
   const cmdHandDis  = () => wsSend('!HD_DIS');
   const cmdHandZero = () => wsSend('!HD_ZERO');
   const cmdHandPos  = () => wsSend('!HD_POS ' + parseInt(handPct || '0'));
-  const cmdHandCur  = () => wsSend('!HD_I ' + parseFloat(handCur || '1.0'));
+  const cmdHandCur  = () => {
+    var current = parseFloat(handCur || '1.0');
+    var limit = motionLimitsRef.current['7'] && motionLimitsRef.current['7'].iLimit;
+    if (Number.isFinite(limit) && current > limit) {
+      current = limit;
+      queueMessage({data: '限制提醒：手爪电流已按已保存上限调整为 ' + current, uart: false, type: 'reject'});
+    }
+    wsSend('!HD_I ' + current);
+  };
   // RGB
   const cmdRgbOn   = () => wsSend('!RGB_ON');
   const cmdRgbOff  = () => wsSend('!RGB_OFF');
@@ -433,7 +453,10 @@ const App = function(props) {
   // Cartesian / interpolated joint
   const cmdMoveL = () => {
     var p = cartIn;
-    wsSend('@' + p.x + ',' + p.y + ',' + p.z + ',' + p.a + ',' + p.b + ',' + p.c + ',' + velocity);
+    var speed = parseFloat(velocity);
+    var speedLimits = Object.keys(motionLimitsRef.current).map(k => motionLimitsRef.current[k].speed).filter(Number.isFinite);
+    if (speedLimits.length) speed = Math.min.apply(Math, [speed].concat(speedLimits));
+    wsSend('@' + p.x + ',' + p.y + ',' + p.z + ',' + p.a + ',' + p.b + ',' + p.c + ',' + speed);
   };
   const cmdMoveInterp = () => {
     var offs = [j1txt, j2txt, j3txt, j4txt, j5txt, j6txt].map(parseFloat);
@@ -444,6 +467,10 @@ const App = function(props) {
   const sendTune = (cmd, key) => {
     var v = tuneVals[key];
     if (v === '' || v == null) return;
+    if (key === 'speed' || key === 'acc' || key === 'iLimit') {
+      var mapKey = key === 'iLimit' ? 'iLimit' : key;
+      motionLimitsRef.current[tuneNode] = Object.assign({}, motionLimitsRef.current[tuneNode], {[mapKey]: parseFloat(v)});
+    }
     wsSend(cmd + ' ' + tuneNode + ' ' + v);
   };
 
@@ -731,7 +758,7 @@ const App = function(props) {
         <button class="btn btn-sm btn-red"  onclick=${cmdOffsetJ}>OffsetJ</button>
         <button class="btn btn-sm btn-blue" onclick=${cmdCalib}>Calibrate HOME</button>
       </div>
-      <div style="font-size:11px; color:#999; margin-top:0.3em;">CmdMode: 0\u53EF\u6253\u65AD / 1\u987A\u5E8F / 2\u8FDE\u7EED</div>
+      <div style="font-size:11px; color:#999; margin-top:0.3em;">1 顺序点位 / 2 可中断点位 / 3 连续轨迹 / 4 电机调参；速度和电流超限时按保存上限执行</div>
     </div>
 
   </div><!-- /row: Joint + RGB + Diagnostics -->

@@ -47,8 +47,32 @@ void CtrlStepMotor::SetPositionWithVelocityLimit(float position, float velocity)
     CanSendMessage(get_can_ctx(hcan), data, &header);
 }
 void CtrlStepMotor::SetNodeID(uint32_t v) { Send(0x11, &v, 1); }
-void CtrlStepMotor::SetCurrentLimit(float v) { Send(0x12, &v, 1); }
-void CtrlStepMotor::SetVelocityLimit(float v) { Send(0x13, &v, 1); }
+bool CtrlStepMotor::SetCurrentLimit(float v) { return Send(0x12, &v, 1); }
+bool CtrlStepMotor::SetVelocityLimit(float v) { return Send(0x13, &v, 1); }
+bool CtrlStepMotor::SaveAcceleration(float v) { return Send(0x14, &v, 1); }
+bool CtrlStepMotor::SetLimit(uint8_t parameter, float value)
+{
+    if (parameter == 0) return SaveAcceleration(value);
+    if (parameter == 1) return SetVelocityLimit(value);
+    return parameter == 2 && SetCurrentLimit(value);
+}
+bool CtrlStepMotor::QueryLimit(uint8_t parameter)
+{
+    if (parameter > 2) return false;
+    limitReceivedMask &= ~(1u << parameter);
+    return Send(0x2c + parameter);
+}
+void CtrlStepMotor::LimitCallback(uint8_t parameter, float configured, float applied)
+{
+    uint32_t first, second;
+    std::memcpy(&first, &configured, 4); std::memcpy(&second, &applied, 4);
+    if (parameter > 2 || (first & 0x7f800000u) == 0x7f800000u ||
+        (second & 0x7f800000u) == 0x7f800000u || configured < 0 || applied < 0) return;
+    limits[parameter] = configured;
+    appliedLimits[parameter] = applied;
+    limitReceivedMask |= 1u << parameter;
+    OnlineCallback();
+}
 void CtrlStepMotor::SetAcceleration(float v) { Send(0x14, &v); }
 bool CtrlStepMotor::ApplyPositionAsHome() { return Send(0x15); }
 void CtrlStepMotor::SetEnableOnBoot(bool enabled) { uint32_t v = enabled; Send(0x16, &v, 1); }

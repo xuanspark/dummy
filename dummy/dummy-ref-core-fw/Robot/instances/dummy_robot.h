@@ -336,6 +336,9 @@ public:
     void InvalidateHome() { isHomed = false; }
     float GetJointSpeed() const { return jointSpeed; }
     void SetCommandMode(uint32_t _mode);
+    const char* ModeName() const;
+    float SpeedRatio() const { return jointSpeedRatio; }
+    void ApplyModeAcceleration();
 
     // ---- 异步系统命令（解决阻塞命令占用 UART 线程导致 STOP 无法抢占的问题）----
     enum SysCmd : uint8_t {
