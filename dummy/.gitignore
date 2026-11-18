@@ -1,6 +1,7 @@
 # 编译输出目录
 build/
 cmake-build-*/
+build-release-*/
 
 # 文档和测试文件夹
 MD/
