@@ -857,6 +857,12 @@ class Robot:
             raise RobotError(f"set_motion_limit: value must be >= 0, got {value}")
         if k == "acc" and v <= 0:
             raise RobotError("加速度必须大于 0")
+        online = await self.check_online(int(node), quiet_ms=120, total_timeout=3.0)
+        if online["nodes"].get(int(node)) is not True:
+            raise RobotError(
+                f"实时节点状态无效，离线节点：{int(node)}",
+                P.ErrorCategory.COMM_TIMEOUT,
+            )
         # Format float cleanly; firmware parses %f
         s = f"{v:.6f}".rstrip('0').rstrip('.') or "0"
         response = await self._exec(f"{self._MOTION_CMDS[k]} {int(node)} {s}")
