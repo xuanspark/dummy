@@ -1,0 +1,8 @@
+<?xml version='1.0' encoding='utf-8'?>
+<RCC>
+    <qresource prefix="/">
+        <file alias="imgs/ico/wx.jpg">imgs/ico/wx.jpg</file>
+        <file alias="imgs/ico/icon.ico">imgs/ico/icon.ico</file>
+        <file alias="imgs/ico/ico.png">imgs/ico/ico.png</file>
+    </qresource>
+</RCC>

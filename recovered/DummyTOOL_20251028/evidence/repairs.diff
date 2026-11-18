@@ -1,0 +1,328 @@
+--- decompiled/main_NEW_NOTEBOOK.py
++++ src/main_NEW_NOTEBOOK.py
+@@ -109,7 +109,7 @@
+                     return (len(parts), parts)
+                 if len(parts) == 7:
+                     if parts[0] == "ok":
+-                        values = [float(x) for x in parts[1[:None]]]
++                        values = [float(x) for x in parts[1:]]
+                         return (len(values), values)
+                 if len(parts) == 6:
+                     if parts[0] == "ok":
+@@ -551,7 +551,7 @@
+         :return: True 表示发送成功，False 表示发送失败
+         """
+         try:
+-            if not (self.serial is None or self.serial.is_open):
++            if self.serial is None or not self.serial.is_open:
+                 self.log_error("Serial port is not open")
+                 return False
+             if CRLF:
+@@ -575,27 +575,26 @@
+             if self.Foolproof == True:
+                 self.log_error("防呆模式已启动，稍后再试！")
+                 return
+-        else:
+-            data = None
+-            button = self.sender()
+-            if button == self.pushButton_endp1:
+-                data = "@" + self.spinBox_1_1.text().strip() + "," + self.spinBox_1_2.text().strip() + "," + self.spinBox_1_3.text().strip() + "," + self.spinBox_1_4.text().strip() + "," + self.spinBox_1_5.text().strip() + "," + self.spinBox_1_6.text().strip()
++        data = None
++        button = self.sender()
++        if button == self.pushButton_endp1:
++            data = "@" + self.spinBox_1_1.text().strip() + "," + self.spinBox_1_2.text().strip() + "," + self.spinBox_1_3.text().strip() + "," + self.spinBox_1_4.text().strip() + "," + self.spinBox_1_5.text().strip() + "," + self.spinBox_1_6.text().strip()
++        else:
++            if button == self.pushButton_endp2:
++                data = "@" + self.spinBox_2_1.text().strip() + "," + self.spinBox_2_2.text().strip() + "," + self.spinBox_2_3.text().strip() + "," + self.spinBox_2_4.text().strip() + "," + self.spinBox_2_5.text().strip() + "," + self.spinBox_2_6.text().strip()
+             else:
+-                if button == self.pushButton_endp2:
+-                    data = "@" + self.spinBox_2_1.text().strip() + "," + self.spinBox_2_2.text().strip() + "," + self.spinBox_2_3.text().strip() + "," + self.spinBox_2_4.text().strip() + "," + self.spinBox_2_5.text().strip() + "," + self.spinBox_2_6.text().strip()
++                if button == self.pushButton_joint:
++                    data = "&" + self.doubleSpinBox_9_1.text().strip() + "," + self.doubleSpinBox_9_2.text().strip() + "," + self.doubleSpinBox_9_3.text().strip() + "," + self.doubleSpinBox_9_4.text().strip() + "," + self.doubleSpinBox_9_5.text().strip() + "," + self.doubleSpinBox_9_6.text().strip()
+                 else:
+-                    if button == self.pushButton_joint:
+-                        data = "&" + self.doubleSpinBox_9_1.text().strip() + "," + self.doubleSpinBox_9_2.text().strip() + "," + self.doubleSpinBox_9_3.text().strip() + "," + self.doubleSpinBox_9_4.text().strip() + "," + self.doubleSpinBox_9_5.text().strip() + "," + self.doubleSpinBox_9_6.text().strip()
++                    if button == self.pushButton_GL:
++                        data = "#GETLPOS"
++                        self.getL = True
+                     else:
+-                        if button == self.pushButton_GL:
+-                            data = "#GETLPOS"
+-                            self.getL = True
++                        if button == self.pushButton_GJ:
++                            data = "#GETJPOS"
++                            self.getJ = True
+                         else:
+-                            if button == self.pushButton_GJ:
+-                                data = "#GETJPOS"
+-                                self.getJ = True
+-                            else:
+-                                print("Button not open")
++                            print("Button not open")
+         if data != None:
+             self.uni_send_data(data)
+ 
+@@ -607,54 +606,52 @@
+             if self.Foolproof == True:
+                 self.log_error("防呆模式已启动，稍后再试！")
+                 return
++        button = self.sender()
++        name = button.text().strip()
++        if name == "CMDMODE":
++            try:
++                command = next(self.cmd_iterator)
++                self.uni_send_data(command)
++            except StopIteration:
++                pass
++
++            return
++        end_of_string = name[-1:]
++        node, kp_value = (1, 200)
++        if end_of_string == "P":
++            jname = self.comboBox_PID.currentText().strip()
++            ji = jname[-1:]
++            node = int(ji)
++            kp_value = self.doubleSpinBox_P.value()
++        elif end_of_string == "I":
++            jname = self.comboBox_PID.currentText().strip()
++            ji = jname[-1:]
++            node = int(ji)
++            kp_value = self.doubleSpinBox_I.value()
++        else:
++            if end_of_string == "D":
++                jname = self.comboBox_PID.currentText().strip()
++                ji = jname[-1:]
++                node = int(ji)
++                kp_value = self.doubleSpinBox_D.value()
+             else:
+-                button = self.sender()
+-                name = button.text().strip()
+-                if name == "CMDMODE":
+-                    try:
+-                        command = next(self.cmd_iterator)
+-                        self.uni_send_data(command)
+-                    except StopIteration:
+-                        pass
+-
+-                    return
+-                    end_of_string = name[(-1)[:None]]
+-                    node, kp_value = (1, 200)
+-                    if end_of_string == "P":
+-                        jname = self.comboBox_PID.currentText().strip()
+-                        ji = jname[(-1)[:None]]
+-                        node = int(ji)
+-                        kp_value = self.doubleSpinBox_P.value()
+-                elif end_of_string == "I":
++                if end_of_string == "V":
+                     jname = self.comboBox_PID.currentText().strip()
+-                    ji = jname[(-1)[:None]]
++                    ji = jname[-1:]
+                     node = int(ji)
+-                    kp_value = self.doubleSpinBox_I.value()
+-                else:
+-                    if end_of_string == "D":
+-                        jname = self.comboBox_PID.currentText().strip()
+-                        ji = jname[(-1)[:None]]
+-                        node = int(ji)
+-                        kp_value = self.doubleSpinBox_D.value()
+-                    else:
+-                        if end_of_string == "V":
+-                            jname = self.comboBox_PID.currentText().strip()
+-                            ji = jname[(-1)[:None]]
+-                            node = int(ji)
+-                            kp_value = self.doubleSpinBox_V.value()
+-        else:
+-            try:
+-                if node < 1 or node > 7:
+-                    raise ValueError("Node must be between 1 and 7")
+-                command = f"#SET_DCE_K{end_of_string} {node} {kp_value}"
+-                self.log_message(f"Generated command: {command}")
+-                self.uni_send_data(command)
+-            except Exception as e:
+-                try:
+-                    self.log_error(f"Unexpected error: {e}")
+-                finally:
+-                    e = None
+-                    del e
++                    kp_value = self.doubleSpinBox_V.value()
++        try:
++            if node < 1 or node > 7:
++                raise ValueError("Node must be between 1 and 7")
++            command = f"#SET_DCE_K{end_of_string} {node} {kp_value}"
++            self.log_message(f"Generated command: {command}")
++            self.uni_send_data(command)
++        except Exception as e:
++            try:
++                self.log_error(f"Unexpected error: {e}")
++            finally:
++                e = None
++                del e
+ 
+     def dummy_REBOOT_J(self):
+         if self.can_click == False:
+@@ -663,7 +660,7 @@
+                 return
+         try:
+             jname = self.comboBox_R.currentText().strip()
+-            ji = jname[(-1)[:None]]
++            ji = jname[-1:]
+             node = int(ji)
+             if node < 1 or node > 7:
+                 raise ValueError("Node must be between 1 and 7")
+@@ -684,7 +681,7 @@
+                 return
+         try:
+             jname = self.comboBox_R.currentText().strip()
+-            ji = jname[(-1)[:None]]
++            ji = jname[-1:]
+             value = self.doubleSpinBox_SPEED_ACC.value()
+             node = int(ji)
+             if node < 1 or node > 7:
+@@ -724,17 +721,16 @@
+             if self.Foolproof == True:
+                 self.log_error("防呆模式已启动，稍后再试！")
+                 return
+-        else:
+-            button = self.sender()
+-            if button:
+-                text = button.text().strip()
+-                start = text[None[:1]]
+-                i = self.indexs.index(start)
+-                text = self.buttontexts.get(i, "No text saved!")
+-                data = "&" + text.strip()
+-                self.uni_send_data(data)
+-            else:
+-                self.log_error("Button not found")
++        button = self.sender()
++        if button:
++            text = button.text().strip()
++            start = text[:1]
++            i = self.indexs.index(start)
++            text = self.buttontexts.get(i, "No text saved!")
++            data = "&" + text.strip()
++            self.uni_send_data(data)
++        else:
++            self.log_error("Button not found")
+ 
+     def on_slider_changed(self, value):
+         """滑块值改变时的槽函数"""
+@@ -757,16 +753,15 @@
+             if self.Foolproof == True:
+                 self.log_error("防呆模式已启动，稍后再试！")
+                 return
+-        else:
+-            button = self.sender()
+-            if button:
+-                data = "!" + button.text().strip()
+-                self.uni_send_data(data)
+-                text = button.text().strip()
+-                self.can_click = False
+-                QTimer.singleShot(self.global_cooldowns.get(text, 0) * 1000, self._reset_cooldown)
+-            else:
+-                self.log_error("Button not found")
++        button = self.sender()
++        if button:
++            data = "!" + button.text().strip()
++            self.uni_send_data(data)
++            text = button.text().strip()
++            self.can_click = False
++            QTimer.singleShot(self.global_cooldowns.get(text, 0) * 1000, self._reset_cooldown)
++        else:
++            self.log_error("Button not found")
+ 
+     def dummy_button_hand(self):
+         if self.can_click == False:
+@@ -804,13 +799,12 @@
+             if self.Foolproof == True:
+                 self.log_error("防呆模式已启动，稍后再试！")
+                 return
+-        else:
+-            button = self.sender()
+-            if button:
+-                data = "!HAND_ZERO"
+-                self.uni_send_data(data)
+-            else:
+-                self.log_error("Button not found")
++        button = self.sender()
++        if button:
++            data = "!HAND_ZERO"
++            self.uni_send_data(data)
++        else:
++            self.log_error("Button not found")
+ 
+     def _reset_cooldown(self):
+         """冷却结束后自动调用"""
+@@ -868,7 +862,7 @@
+         else:
+             try:
+                 scale_text = self.comboBox_scale.currentText()
+-                scale_value = float(scale_text[(-2)[:None]])
++                scale_value = float(scale_text[-2:])
+             except Exception as e:
+                 try:
+                     print(f"比例获取错误: {e}, 使用默认值1.0")
+@@ -930,7 +924,7 @@
+         current_pos = self.curreentLpos if self.curreentLpos is not None else [0] * 6
+         try:
+             scale_text = self.comboBox_scale.currentText()
+-            scale_value = float(scale_text[(-2)[:None]]) / 1.0
++            scale_value = float(scale_text[-2:]) / 1.0
+         except Exception as e:
+             try:
+                 print(f"比例获取错误: {e}, 使用默认值1.0")
+@@ -969,7 +963,7 @@
+         else:
+             new_ports = self.serial_ports_plus()
+             if sys.platform.startswith("win"):
+-                new_ports = sorted(new_ports, key=(lambda p: int(p[3[:None]])), reverse=True)
++                new_ports = sorted(new_ports, key=(lambda p: int(p[3:])), reverse=True)
+             else:
+                 new_ports = sorted(new_ports)
+         current_ports = [self.cboxPortName.itemText(i) for i in range(self.cboxPortName.count())]
+@@ -1114,7 +1108,7 @@
+     def load_history(self, max_lines=200):
+         if os.path.exists(self.rootpath + "history.txt"):
+             with open((self.rootpath + "history.txt"), "r", encoding="utf-8") as file:
+-                return [line.strip() for line in file.readlines()[(-max_lines)[:None]]]
++                return [line.strip() for line in file.readlines()[-max_lines:]]
+         return []
+ 
+     def save_history(self, max_lines=500):
+@@ -1124,7 +1118,7 @@
+                 items.append(self.txtSend.itemText(i))
+ 
+             if len(items) > max_lines:
+-                items = items[(-max_lines)[:None]]
++                items = items[-max_lines:]
+             with open((self.rootpath + "history.txt"), "w", encoding="utf-8") as file:
+                 for item in items:
+                     file.write(item + "\n")
+--- decompiled/ActionManager.py
++++ src/ActionManager.py
+@@ -184,16 +184,16 @@
+         if self.is_running == False:
+             if self.is_recording == True:
+                 return
+-                selected_item = self.action_list.currentItem()
+-                if selected_item:
+-                    action_name = selected_item.text()
+-                    for action in self.action_manager.actions:
+-                        if action.name == action_name:
+-                            self.execute_points(action.points)
+-                            break
+-
+-                    self.execute_button.setText("停止")
+-                    self.is_running = True
++            selected_item = self.action_list.currentItem()
++            if selected_item:
++                action_name = selected_item.text()
++                for action in self.action_manager.actions:
++                    if action.name == action_name:
++                        self.execute_points(action.points)
++                        break
++
++                self.execute_button.setText("停止")
++                self.is_running = True
+             else:
+                 QMessageBox.warning(self, "警告", "请选择一个动作！")
+         else:

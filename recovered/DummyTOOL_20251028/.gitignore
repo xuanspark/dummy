@@ -1,0 +1,10 @@
+# 原始字节码保留在本地，通过清单记录校验值。
+/bytecode/
+/evidence/*.dis.txt
+/evidence/*.png
+/evidence/fixtures/
+/runtime/
+/config/
+/activation.key
+/src/config/
+/src/activation.key

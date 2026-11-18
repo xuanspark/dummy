@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "source_name": "DummyTOOL_20251028.exe",
+  "source_size": 40277328,
+  "source_sha256": "4621d9607d795b47604ce03740d884712ac09020bd8b10347620e0357c597f7c",
+  "python_bytecode": "3.7.0 (3394)",
+  "tools": {
+    "pyinstaller": "6.20.0",
+    "uncompyle6": "3.9.3",
+    "xdis": "6.1.7"
+  },
+  "modules": [
+    {
+      "name": "main_NEW_NOTEBOOK",
+      "marshal_bytes": 38023,
+      "marshal_sha256": "13b2de5cfa722424819bb58d41b874472d916eb1dc5997e8a8ef81bb43ea8d1e",
+      "source_sha256": "566f437e39098619bb2c0d806d898851a132d389e69e866324f2bcec46955f1e",
+      "syntax_valid": true,
+      "replacement_characters": 0,
+      "chinese_characters": 651
+    },
+    {
+      "name": "ActionManager",
+      "marshal_bytes": 10217,
+      "marshal_sha256": "9fe3a5efe8b9c9a448e71471c68414a654f59ba52195655e4863e58fa1cf9068",
+      "source_sha256": "ffd33dfbb1e3d7b750cf57abfe20542542332a3910dc1ac6cfa70f78dc9a07d2",
+      "syntax_valid": true,
+      "replacement_characters": 0,
+      "chinese_characters": 89
+    },
+    {
+      "name": "ActivateAPP",
+      "marshal_bytes": 4590,
+      "marshal_sha256": "feef1b1322f534328c32f2efda0d0bc80bc3feea42b196e8cec2ae8361a40d54",
+      "source_sha256": "0912babec11aaa221ac4310968625d370823f0436d52c964d6266cc2661249da",
+      "syntax_valid": true,
+      "replacement_characters": 0,
+      "chinese_characters": 153
+    },
+    {
+      "name": "mainwindow",
+      "marshal_bytes": 27131,
+      "marshal_sha256": "10a6f927f92cb81b6aa5eeacb4187c22e37527d997316957942de5e96b8a9389",
+      "source_sha256": "e82b675ea427765278ab318bfd98c8c5c2a26a81482f53c41750693c2fe7e7a4",
+      "syntax_valid": true,
+      "replacement_characters": 0,
+      "chinese_characters": 383
+    },
+    {
+      "name": "resources",
+      "marshal_bytes": 53843,
+      "marshal_sha256": "08f1770990feeb495655ec994bd1f4e9fd7c2275e9c8213bb140e9052e29acc8",
+      "source_sha256": "b997d47db81a9f21e76e8670e8089e62df4a0a80f66f3c0872543faf83de5c29",
+      "syntax_valid": true,
+      "replacement_characters": 0,
+      "chinese_characters": 0
+    },
+    {
+      "name": "subform",
+      "marshal_bytes": 2341,
+      "marshal_sha256": "4821809f7b8a5514a74bf4db2a74527000c4b744a3ec533055f31dd735ef3fd6",
+      "source_sha256": "e4fa615d6e1cb6db51a00efac45b12bb7aa733cad5fce0174510106d68e42816",
+      "syntax_valid": true,
+      "replacement_characters": 0,
+      "chinese_characters": 10
+    }
+  ],
+  "executable_launched": false,
+  "hardware_commands_sent": false
+}

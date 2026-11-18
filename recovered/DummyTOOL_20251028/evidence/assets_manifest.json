@@ -1,0 +1,17 @@
+[
+  {
+    "resource": ":/imgs/ico/wx.jpg",
+    "bytes": 32498,
+    "sha256": "dd84c0c8e1943c6b86fbb3b917ea0893f1a5a419c0a3bbb4cf14a3cd19542ab2"
+  },
+  {
+    "resource": ":/imgs/ico/icon.ico",
+    "bytes": 71926,
+    "sha256": "fa030963bea8ee5ff44342b6fd612a81f502e322186cb13826c80edd2b6c03d5"
+  },
+  {
+    "resource": ":/imgs/ico/ico.png",
+    "bytes": 12079,
+    "sha256": "5c3fb42f445d98fe612ea0bd275d69f854648e28df31f85ee1a2769e5e42d817"
+  }
+]

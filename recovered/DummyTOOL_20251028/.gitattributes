@@ -1,0 +1,12 @@
+# 固定文本换行，确保跨机器检出后恢复清单中的 SHA256 可复核。
+*.py text eol=lf
+*.json text eol=lf
+*.diff text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+*.qrc text eol=lf
+.gitignore text eol=lf
+.gitattributes text eol=lf
+*.png binary
+*.jpg binary
+*.ico binary
