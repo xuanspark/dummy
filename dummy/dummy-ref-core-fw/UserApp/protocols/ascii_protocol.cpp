@@ -208,14 +208,13 @@ bool ReadLimits(CtrlStepMotor* const* motors, uint32_t first, uint32_t last, int
         bool complete = true;
         for (uint32_t n = first; n <= last; ++n) {
             if (!motors[n]) continue;
-            for (int p = 0; p < 3; ++p) {
-                if (parameter >= 0 && parameter != p) continue;
-                if (!(motors[n]->limitReceivedMask & (1u << p))) {
+                for (int p = 0; p < 3; ++p) {
+                    if (parameter >= 0 && parameter != p) continue;
+                    // 每次读取都重新查询节点，禁止复用上一次限制参数。
                     pending = true;
                     complete = false;
                     if (!motors[n]->QueryLimit(p)) osDelay(2);
                 }
-            }
         }
         if (complete) return true;
         if (!pending) return true;
