@@ -64,6 +64,9 @@ void Motor::CloseLoopControlTick()
         controller->realLapPositionLast = angle;
         controller->realPosition = angle;
         controller->realPositionLast = angle;
+#ifdef J1_SOUND_EXPERIMENT
+        controller->soundPositionReady = true;
+#endif
 
         isFirstCalled = false;
         return;
@@ -378,6 +381,34 @@ void Motor::Controller::CalcCurrentToOutput(int32_t current)
 }
 
 #ifdef J1_SOUND_EXPERIMENT
+bool Motor::Controller::SoundHoldReady() const
+{
+    return soundHoldActive && modeRunning == MODE_COMMAND_POSITION &&
+        requestMode == MODE_COMMAND_POSITION && state == STATE_FINISH &&
+        goalPosition == softPosition && softVelocity == 0 &&
+        estVelocity <= 2560 && estVelocity >= -2560 && estError <= 128 && estError >= -128 &&
+        !goalDisable && !softDisable && !goalBrake && !softBrake &&
+        !isStalled && !overloadFlag && context->encoder->IsCalibrated();
+}
+
+uint8_t Motor::Controller::PrepareSoundHold()
+{
+    // 仅从静止失能状态进入；目标取本地编码器，避免上位机角度及零偏换算误差。
+    if (soundHoldActive) return SoundHoldReady() ? 0 : 4;
+    if (!soundPositionReady || modeRunning != MODE_STOP || requestMode != MODE_STOP ||
+        estVelocity > 2560 || estVelocity < -2560 || isStalled || overloadFlag ||
+        !context->encoder->IsCalibrated()) return 4;
+    goalPosition = softPosition = realPosition;
+    goalVelocity = softVelocity = 0;
+    goalCurrent = softCurrent = 0;
+    goalBrake = softBrake = false;
+    goalDisable = softDisable = false;
+    ClearIntegral();
+    soundHoldActive = true;
+    requestMode = MODE_COMMAND_POSITION;
+    return 0;
+}
+
 uint8_t Motor::Controller::StartSound(uint16_t frequency, uint16_t duration, uint16_t amplitude)
 {
     if (modeRunning != MODE_COMMAND_POSITION || requestMode != MODE_COMMAND_POSITION ||
@@ -608,7 +639,12 @@ int32_t Motor::Controller::CompensateAdvancedAngle(int32_t _vel)
 // Init: 控制器初始化。调用于 main.cpp 启动顺序中。
 void Motor::Controller::Init()
 {
+#ifdef J1_SOUND_EXPERIMENT
+    // 实验启动时不采用 EEPROM 的自动使能选项，等待显式准备命令。
+    requestMode = MODE_STOP;
+#else
     requestMode = boardConfig.enableMotorOnBoot ? static_cast<Mode_t>(boardConfig.defaultMode) : MODE_STOP;
+#endif
 
     modeRunning = MODE_STOP;
     state = STATE_STOP;

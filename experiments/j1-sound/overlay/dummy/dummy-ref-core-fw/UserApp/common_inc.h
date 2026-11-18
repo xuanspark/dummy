@@ -9,7 +9,7 @@
 
 #define CONFIG_FW_VERSION 1.1    // 固件版本号，供启动横幅 / Fibre 查询
 #ifdef J1_SOUND_EXPERIMENT
-#define CONFIG_FW_VERSION_TEXT "1.2.1-exp1"
+#define CONFIG_FW_VERSION_TEXT "1.3.1-exp2"
 #else
 #define CONFIG_FW_VERSION_TEXT "1.1.6"
 #endif

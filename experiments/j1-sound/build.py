@@ -12,6 +12,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 BASELINE = "755b2cc"
 TEST_LABEL = "TEST-J1-SOUND"
+VERSION = "1.3.1-exp2"
 PROJECTS = {
     "ref": ("dummy-ref-core-fw", "Core-STM32F4-fw", "ref"),
     "42": ("dummy-42motor-fw", "Ctrl-Step-STM32-fw", "42motor"),
@@ -65,7 +66,7 @@ def package(component, number):
     ram_end = 0x20020000 if component == "ref" else 0x20005000
     if not 0x20000000 < stack <= ram_end or not reset & 1 or not 0x08000000 < reset < 0x08000000 + len(data):
         raise RuntimeError("启动向量检查未通过")
-    manifest = {"experiment": "J1 短音可行性和音量测试", "version": "1.2.1-exp1",
+    manifest = {"experiment": "J1 短音可行性和音量测试", "version": VERSION,
                 "test_only": True, "label": TEST_LABEL,
                 "baseline": BASELINE, "component": component, "files": files,
                 "initial_stack": hex(stack), "reset_vector": hex(reset),
@@ -80,7 +81,7 @@ def main():
     parser = argparse.ArgumentParser(description="编译独立 J1 发声实验")
     parser.add_argument("--prepare-only", action="store_true")
     parser.add_argument("--component", choices=("ref", "42", "all"), default="all")
-    parser.add_argument("--number", type=int, default=21)
+    parser.add_argument("--number", type=int, default=23)
     args = parser.parse_args()
     if not 0 <= args.number <= 9999:
         parser.error("编译编号必须为 0 到 9999")

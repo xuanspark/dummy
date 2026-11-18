@@ -34,7 +34,7 @@ void OnCanCmd(uint8_t _cmd, uint8_t* _data, uint32_t _len)
     // 任何运动、失能、校准或参数修改先终止声音；查询不干扰短音。
     if (_cmd < 0x20 || _cmd >= 0x7d) motor.controller->soundPulse.Cancel();
     if (_cmd == 0x30) {
-        if (_len != 8 || boardConfig.canNodeId != 1 || _data[0] > 2) return;
+        if (_len != 8 || boardConfig.canNodeId != 1 || _data[0] > 3) return;
         const uint32_t mask = __get_PRIMASK();
         __disable_irq();
         uint8_t result = 0;
@@ -46,13 +46,19 @@ void OnCanCmd(uint8_t _cmd, uint8_t* _data, uint32_t _len)
             result = encoderCalibrator.isTriggered ? 4 :
                 motor.controller->StartSound(frequency, duration, amplitude);
         }
+        if (_data[0] == 3) result = encoderCalibrator.isTriggered ? 4 :
+            motor.controller->PrepareSoundHold();
         uint8_t reply[8] = {0x53, _data[1], result,
-            static_cast<uint8_t>(motor.controller->soundPulse.state), 1, 0, 0, 0};
+            static_cast<uint8_t>(motor.controller->soundPulse.state), 2,
+            static_cast<uint8_t>(motor.controller->soundHoldActive),
+            static_cast<uint8_t>(motor.controller->SoundHoldReady()), 0};
         __set_PRIMASK(mask);
         txHeader.StdId = (boardConfig.canNodeId << 7) | 0x30;
         CAN_Send(&txHeader, reply);
         return;
     }
+    // 单节点实验锁存后仅接受查询和专用实验帧，禁止其他入口改变目标或持久参数。
+    if (motor.controller->soundHoldActive && !(_cmd >= 0x20 && _cmd <= 0x2b)) return;
 #endif
 
     switch (_cmd)

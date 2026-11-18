@@ -37,9 +37,25 @@ int main()
     Motor motor;
     motor.AttachEncoder(&encoder);
     motor.AttachDriver(&driver);
+    boardConfig.enableMotorOnBoot = true;
     motor.controller->Init();
+    assert(motor.controller->requestMode == Motor::MODE_STOP);
     for (int i = 0; i < 10; ++i) motor.Tick20kHz();
     assert(motor.controller->StartSound(1000, 200, 100) == 4);
+    encoder.calibrated = false;
+    assert(motor.controller->PrepareSoundHold() == 4);
+    encoder.calibrated = true;
+    // 当前编码器不在零点时，准备动作也不能把目标拉回零点。
+    encoder.angleData.rectifiedAngle = 1024;
+    for (int i = 0; i < 2000; ++i) motor.Tick20kHz();
+    const auto position = motor.controller->GetPosition();
+    assert(position != 0);
+    assert(motor.controller->PrepareSoundHold() == 0);
+    assert(!motor.controller->SoundHoldReady());
+    for (int i = 0; i < 100; ++i) motor.Tick20kHz();
+    assert(motor.controller->SoundHoldReady());
+    assert(motor.controller->GetPosition() == position);
+    assert(motor.controller->PrepareSoundHold() == 0);
     motor.controller->SetCtrlMode(Motor::MODE_COMMAND_POSITION);
     for (int i = 0; i < 10; ++i) motor.Tick20kHz();
     assert(motor.controller->StartSound(1000, 200, 100) == 0);
@@ -47,7 +63,7 @@ int main()
     assert(driver.excitationWrites > 1000);
     assert(motor.controller->soundPulse.state == SoundPulse::FINISHED);
     assert(motor.controller->modeRunning == Motor::MODE_COMMAND_POSITION);
-    assert(motor.controller->GetPosition() == 0);
+    assert(motor.controller->GetPosition() == position);
     for (int i = 0; i < 20000; ++i) motor.Tick20kHz();
     assert(motor.controller->StartSound(1000, 200, 100) == 0);
     for (int i = 0; i < 100; ++i) motor.Tick20kHz();

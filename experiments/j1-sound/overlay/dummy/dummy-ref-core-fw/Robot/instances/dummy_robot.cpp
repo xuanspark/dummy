@@ -90,6 +90,13 @@ void DummyRobot::RequestEmergencyStop()
 void DummyRobot::ApplyEmergencyBrake()
 {
     if (robotState != STATE_EMERGENCY_STOP) return;
+#ifdef J1_SOUND_EXPERIMENT
+    if (j1TestMode) {
+        // 子板保持原位置闭环；仅取消励磁，不广播、不切换速度模式。
+        motorJ[1]->SendSoundTest(0, 0);
+        return;
+    }
+#endif
     if (restoreEnablePending && motorJ[ALL]->SetEnable(true)) {
         isEnabled = true;
         hand2->enabledFlag = true;
@@ -109,8 +116,10 @@ void DummyRobot::ApplyEmergencyBrake()
 bool DummyRobot::CanTransmit(uint8_t command, const uint8_t* data) const
 {
 #ifdef J1_SOUND_EXPERIMENT
-    if (command == 0x30) return data[0] <= 2 &&
-        (data[0] != 1 || (robotState == STATE_NORMAL && !pauseRequested));
+    if (command == 0x30) return data[0] <= 3 &&
+        ((data[0] == 0 || data[0] == 2) ||
+         (robotState == STATE_NORMAL && !pauseRequested && (data[0] != 3 || j1TestMode)));
+    if (j1TestMode) return command >= 0x20 && command <= 0x2b;
 #endif
     if (command >= 0x20 && command <= 0x2b) return true;
     if (robotState == STATE_EMERGENCY_STOP) {
@@ -502,6 +511,9 @@ bool DummyRobot::RunHand(const char* command, bool ensureHomed)
 
 uint32_t DummyRobot::CommandHandler::Push(const std::string& command, uint8_t channel, uint32_t request)
 {
+#ifdef J1_SOUND_EXPERIMENT
+    if (context->j1TestMode) return 0xfc;
+#endif
     if (context->robotState != STATE_NORMAL || context->pauseRequested) return 0xfe;
     if (command != "!START" && !context->IsEnabled()) return 0xfd;
     if (command.empty() || command.size() >= sizeof(CommandMessage::text)) return 0xfb;

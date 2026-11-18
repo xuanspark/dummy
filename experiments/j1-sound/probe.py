@@ -12,11 +12,15 @@ def main():
     parser = argparse.ArgumentParser(description="J1 短音和音量实验")
     parser.add_argument("--port", default="COM3")
     parser.add_argument("--play", action="store_true", help="执行一次短音")
+    parser.add_argument("--j1-only", action="store_true", help="仅 J1 接线，使用独立位置保持状态")
+    parser.add_argument("--prepare", action="store_true", help="显式使能 J1 并保持当前位置，不执行整臂 HOME")
     parser.add_argument("--frequency", type=int, default=1000)
     parser.add_argument("--duration", type=int, default=200)
     parser.add_argument("--amplitude", type=int, default=50)
     parser.add_argument("--stop-after", type=int, help="短音受理后指定毫秒发送 STOP")
     args = parser.parse_args()
+    if args.prepare and not args.j1_only:
+        parser.error("--prepare 须同时指定 --j1-only")
     if not 400 <= args.frequency <= 2000 or not 50 <= args.duration <= 500 or not 25 <= args.amplitude <= 250:
         parser.error("频率须为 400～2000 Hz，时长 50～500 ms，励磁峰值 25～250 mA")
     if args.stop_after is not None and (not args.play or not 0 <= args.stop_after < args.duration):
@@ -70,16 +74,34 @@ def main():
     try:
         link.open()
         status = send("#STATUS", lambda line: line == "Status End")
-        if not any("FW:1.2.1-exp1 " in line for line in status):
+        if not any("FW:1.2.1-exp1 " in line or "FW:1.3.1-exp2 " in line for line in status):
             raise RuntimeError("REF 不是本次实验版本，请先核对烧录文件")
         sound = send("#J1_SOUND", lambda line: line.startswith("J1Sound OK"))
-        if not any("EXP:1" in line for line in sound):
+        if not any("EXP:1 " in line or "EXP:2 " in line for line in sound):
             raise RuntimeError("未收到 J1 实验子板确认，请核对 42 固件")
+        if args.j1_only and not any("FW:1.3.1-exp2 " in line for line in status):
+            raise RuntimeError("单 J1 模式须烧录新版 REF 实验固件")
+        if args.j1_only and not any("EXP:2 " in line for line in sound):
+            raise RuntimeError("单 J1 模式须烧录新版 J1 子板实验固件")
+        if args.prepare:
+            if not any("Status OK STATE:NORMAL" in line for line in status) or not any(
+                    "ENABLED:0 HOMED:0 ACTIVE:0 QUEUE:0" in line for line in status):
+                raise RuntimeError("准备单 J1 模式前，整臂须未使能、空闲且处于正常状态")
+            result = send("!J1_TEST_START", lambda line: line.startswith("J1TestStart OK"), timeout=3.0)
+            if not any("MODE:J1_ONLY HOLD:1 READY:1" in line for line in result):
+                raise RuntimeError("单 J1 位置保持未就绪，请检查日志")
+            status = send("#STATUS", lambda line: line == "Status End")
+            sound = send("#J1_SOUND", lambda line: line.startswith("J1Sound OK"))
         send("#GETJPOS", lambda line: line.startswith("GetJPos OK"))
         if args.play:
-            if "Status OK STATE:NORMAL" not in "\n".join(status) or not any(
-                    "ENABLED:1 HOMED:1 ACTIVE:0 QUEUE:0" in line for line in status):
-                raise RuntimeError("机械臂须已使能、归位且空闲；本脚本不会自动执行运动")
+            normal = "Status OK STATE:NORMAL" in "\n".join(status)
+            if args.j1_only:
+                ready = any("ENABLED:0 HOMED:0 ACTIVE:0 QUEUE:0" in line for line in status) and any(
+                    "MODE:J1_ONLY HOLD:1 READY:1" in line for line in sound)
+            else:
+                ready = any("ENABLED:1 HOMED:1 ACTIVE:0 QUEUE:0" in line for line in status)
+            if not normal or not ready:
+                raise RuntimeError("测试位置保持未就绪或当前忙碌；脚本不会自动执行 START/HOME")
             if any("SOUND:1 " in line for line in sound):
                 raise RuntimeError("已有短音正在播放")
             result = send(f"!J1_SOUND {args.frequency} {args.duration} {args.amplitude}",

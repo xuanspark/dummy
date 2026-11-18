@@ -43,9 +43,12 @@ void OnCanMessage(CAN_context* canCtx, CAN_RxHeaderTypeDef* rxHeader, uint8_t* d
 #ifdef J1_SOUND_EXPERIMENT
         if (cmd == 0x30) {
             if (id == 1 && rxHeader->DLC == 8 && rxHeader->RTR == CAN_RTR_DATA &&
-                data[0] == 0x53 && data[4] == 1) {
+                data[0] == 0x53 && (data[4] == 1 || data[4] == 2)) {
                 dummy.motorJ[1]->soundResult = data[2];
                 dummy.motorJ[1]->soundState = data[3];
+                dummy.motorJ[1]->soundCapability = data[4];
+                dummy.motorJ[1]->soundHoldActive = data[5];
+                dummy.motorJ[1]->soundHoldReady = data[6];
                 dummy.motorJ[1]->soundAckToken = data[1];
                 dummy.motorJ[1]->OnlineCallback();
             }

@@ -90,6 +90,7 @@ public:
     bool SendSoundTest(uint8_t operation, uint8_t token, uint16_t frequency = 0,
                        uint16_t duration = 0, uint16_t amplitude = 0);
     volatile uint8_t soundAckToken = 0, soundResult = 0, soundState = 0;
+    volatile uint8_t soundCapability = 0, soundHoldActive = 0, soundHoldReady = 0;
 #endif
     void SetEnableOnBoot(bool _enable);
     void SetEnableStallProtect(bool _enable);

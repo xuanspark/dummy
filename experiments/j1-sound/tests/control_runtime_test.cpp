@@ -77,6 +77,11 @@ static bool staleSoundAck = false;
 static uint8_t simulatedSoundState = 0;
 static uint32_t soundEndTick = 0;
 static unsigned soundStarts = 0;
+static uint8_t soundCapability = 1;
+static bool simulatedHold = false;
+static uint32_t holdReadyTick = 0;
+static unsigned holdStarts = 0;
+static std::vector<std::pair<int, int>> acceptedFrames;
 bool CanSendMessage(CAN_context*, uint8_t* data, CAN_TxHeaderTypeDef* header)
 {
     int node = header->StdId >> 7;
@@ -87,6 +92,7 @@ bool CanSendMessage(CAN_context*, uint8_t* data, CAN_TxHeaderTypeDef* header)
         dummy.RequestEmergencyStop();
     }
     if (!dummy.CanTransmit(command, data)) return false;
+    acceptedFrames.emplace_back(node, command);
     if (command == 0x30 && node == 1) {
         if (!soundSupported) return true;
         if (data[0] == 1) {
@@ -95,8 +101,16 @@ bool CanSendMessage(CAN_context*, uint8_t* data, CAN_TxHeaderTypeDef* header)
             soundEndTick = tick + (data[4] | (uint16_t(data[5]) << 8));
         } else if (data[0] == 0) simulatedSoundState = 3;
         else if (simulatedSoundState == 1 && tick >= soundEndTick) simulatedSoundState = 2;
+        if (data[0] == 3 && soundCapability == 2) {
+            ++holdStarts;
+            if (!simulatedHold) holdReadyTick = tick + 10;
+            simulatedHold = true;
+        }
         dummy.motorJ[1]->soundResult = 0;
         dummy.motorJ[1]->soundState = simulatedSoundState;
+        dummy.motorJ[1]->soundCapability = soundCapability;
+        dummy.motorJ[1]->soundHoldActive = simulatedHold;
+        dummy.motorJ[1]->soundHoldReady = simulatedHold && tick >= holdReadyTick;
         dummy.motorJ[1]->soundAckToken = staleSoundAck ? data[1] - 1 : data[1];
     }
     if (command == 4 && (node == 0 || node == 1)) simulatedSoundState = 3;
@@ -148,6 +162,7 @@ static void RunOne() { dummy.commandHandler.ParseCommand(dummy.commandHandler.Po
 static void Reset()
 {
     delayHook = {};
+    dummy.j1TestMode = false;
     dummy.robotState = DummyRobot::STATE_NORMAL;
     dummy.commandHandler.ClearFifo();
     dummy.scheduledActions = 0;
@@ -483,6 +498,83 @@ int main()
                 "sound_query_allowed_during_stop");
         Send("!RESUME");
         Require(soundStarts == startsBefore, "resume_does_not_replay_sound");
+
+        // 单节点实验不依赖整臂使能或 HOME，始终使用本地当前位置保持。
+        Reset();
+        Send("!CLOSE"); RunOne();
+        Require(!dummy.IsEnabled() && !dummy.IsHomed(), "single_node_starts_with_arm_disabled");
+        usb.text.clear(); j1Targets.clear(); acceptedFrames.clear();
+        Send("!J1_TEST_START"); ProcessAsciiCommand(0);
+        Require(usb.text.find("require_exp2_board") != std::string::npos &&
+                !dummy.j1TestMode && !holdStarts, "single_node_rejects_old_board_without_enable");
+        soundCapability = 2;
+        usb.text.clear();
+        Send("!J1_TEST_START"); ProcessAsciiCommand(0);
+        Require(usb.text.find("J1TestStart OK MODE:J1_ONLY HOLD:1 READY:1") != std::string::npos &&
+                dummy.j1TestMode && !dummy.IsEnabled() && !dummy.IsHomed() && simulatedHold,
+                "single_node_hold_does_not_forge_arm_state");
+        Send("!J1_TEST_START"); ProcessAsciiCommand(0);
+        Require(j1Targets.empty(), "repeated_prepare_has_no_position_command");
+        for (const auto& frame : acceptedFrames)
+            Require(frame.first == 1 && frame.second == 0x30, "prepare_only_addresses_j1_experiment");
+        const char* rejected[] = {"!START", "!HOME", "!CLOSE", "!HD_O", "&1,0,90,0,0,0,5", "#SETPID 1 P 123"};
+        for (const auto* command : rejected) Send(command);
+        Require(dummy.commandHandler.GetSpace() == 16 &&
+                usb.text.find("j1_test_only") != std::string::npos, "single_node_rejects_arm_actions_and_parameters");
+        float target = 100;
+        uint32_t enable = 1;
+        Require(!dummy.CanTransmit(0x07, reinterpret_cast<uint8_t*>(&target)) &&
+                !dummy.CanTransmit(0x01, reinterpret_cast<uint8_t*>(&enable)), "single_node_blocks_lower_level_motion");
+        Send("#STATUS"); ProcessAsciiCommand(0);
+        Require(usb.text.find("J1_TEST_MODE:1") != std::string::npos &&
+                usb.text.find("ENABLED:0 HOMED:0 ACTIVE:0 QUEUE:0") != std::string::npos, "single_node_status_is_explicit");
+        usb.text.clear(); acceptedFrames.clear();
+        Send("!J1_SOUND 1000 200 50"); ProcessAsciiCommand(0);
+        Require(usb.text.find("J1Sound OK SOUND:2") != std::string::npos &&
+                j1Targets.empty(), "single_node_sound_without_arm_home");
+        bool singleStopped = false;
+        delayHook = [&] {
+            if (!singleStopped && simulatedSoundState == 1) {
+                singleStopped = true;
+                Send("!STOP");
+                Require(simulatedSoundState == 3 && simulatedHold && dummy.j1TestMode,
+                        "single_stop_cancels_excitation_and_keeps_hold");
+            }
+        };
+        Send("!J1_SOUND 1000 500 50"); ProcessAsciiCommand(0);
+        delayHook = {};
+        Require(singleStopped && usb.text.find("J1Sound Error: cancelled") != std::string::npos,
+                "single_node_stop_works_with_arm_disabled");
+        for (const auto& frame : acceptedFrames)
+            Require(frame.first == 1 && frame.second == 0x30, "single_stop_never_broadcasts_or_changes_mode");
+        Send("#J1_SOUND"); ProcessAsciiCommand(0);
+        Require(usb.text.find("EXP:2 SOUND:3 STATE:EMERGENCY_STOP MODE:J1_ONLY HOLD:1 READY:1") != std::string::npos,
+                "single_node_estop_query_reports_hold");
+        const auto singleStarts = soundStarts;
+        Send("!RESUME");
+        Require(soundStarts == singleStarts && dummy.j1TestMode && simulatedHold,
+                "single_resume_keeps_isolation_without_replay");
+        Send("!PAUSE");
+        Send("!J1_SOUND 1000 200 50");
+        Require(soundStarts == singleStarts && dummy.robotState == DummyRobot::STATE_PAUSED,
+                "single_node_pause_blocks_new_sound");
+        Send("!STOP");
+        Require(dummy.robotState == DummyRobot::STATE_EMERGENCY_STOP, "single_pause_upgrades_to_stop");
+        Send("!RESUME");
+
+        // 准备期间的 STOP 也必须取消；锁存保留，不能转入整臂流程。
+        dummy.j1TestMode = false; simulatedHold = false;
+        bool prepareStopped = false;
+        delayHook = [&] {
+            if (!prepareStopped && dummy.j1TestMode) { prepareStopped = true; Send("!STOP"); }
+        };
+        usb.text.clear();
+        Send("!J1_TEST_START"); ProcessAsciiCommand(0);
+        delayHook = {};
+        Require(prepareStopped && dummy.j1TestMode && simulatedHold &&
+                dummy.robotState == DummyRobot::STATE_EMERGENCY_STOP &&
+                usb.text.find("J1TestStart OK") == std::string::npos,
+                "stop_during_prepare_never_reports_success");
         std::cout << "firmware runtime scenarios passed\n";
         return 0;
     } catch (const std::exception& error) {

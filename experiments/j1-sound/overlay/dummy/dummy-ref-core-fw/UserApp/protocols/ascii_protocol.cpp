@@ -36,6 +36,7 @@ const char* Tag(const char* command)
     static const Entry entries[] = {
 #ifdef J1_SOUND_EXPERIMENT
         {"!J1_SOUND", "J1Sound"}, {"#J1_SOUND", "J1Sound"},
+        {"!J1_TEST_START", "J1TestStart"},
 #endif
         {"!START", "Started"}, {"!HOME", "Home"}, {"!RESET", "Reset"}, {"!CLOSE", "Close"},
         {"!HD_O", "HD_O"}, {"!HD_C", "HD_C"}, {"!HD_POS", "HD_POS"}, {"!HD_ZERO", "HD_ZERO"},
@@ -189,7 +190,13 @@ bool Saved(CtrlStepMotor* motor)
 }
 
 #ifdef J1_SOUND_EXPERIMENT
-// 临时实验入口仅借用维护互斥，不进入运动队列、不自动使能或归位。
+bool AllowedInJ1Test(const char* command)
+{
+    return Query(command) || Is(command, "!J1_TEST_START") || Is(command, "!J1_SOUND") ||
+        Is(command, "!RGB_ON") || Is(command, "!RGB_OFF") || Is(command, "!RGB_MODE") ||
+        Is(command, "!RGB_CUSTOM");
+}
+// 临时实验入口仅借用维护互斥，不进入运动队列，不执行整臂归位。
 bool SoundExchange(uint8_t operation, uint16_t frequency = 0, uint16_t duration = 0,
                    uint16_t amplitude = 0)
 {
@@ -202,13 +209,51 @@ bool SoundExchange(uint8_t operation, uint16_t frequency = 0, uint16_t duration 
     while (motor->soundAckToken != sequence && HAL_GetTick() - start < 150) osDelay(2);
     return motor->soundAckToken == sequence;
 }
+void StartJ1Test(StreamSink& output, int count)
+{
+    if (count != 1) { Respond(output, "J1TestStart Error: bad_args"); return; }
+    if (dummy.IsEnabled()) { Respond(output, "J1TestStart Error: arm_enabled"); return; }
+    auto* motor = dummy.motorJ[1];
+    const uint32_t epoch = dummy.stopEpoch;
+    if (!SoundExchange(2) || motor->soundCapability != 2) {
+        Respond(output, "J1TestStart Error: require_exp2_board"); return;
+    }
+    const uint32_t mask = __get_PRIMASK();
+    __disable_irq();
+    const bool allowed = dummy.stopEpoch == epoch && dummy.robotState == DummyRobot::STATE_NORMAL &&
+        !dummy.pauseRequested;
+    if (allowed) dummy.j1TestMode = true;
+    __set_PRIMASK(mask);
+    if (!allowed) { Respond(output, "J1TestStart Error: interrupted STATE:%s", dummy.StateName()); return; }
+    // 锁存隔离后才允许单节点使能；失败也保留隔离，防止串入整臂动作。
+    if (!SoundExchange(3) || motor->soundResult != 0) {
+        motor->SendSoundTest(0, 0);
+        Respond(output, "J1TestStart Error: hold_failed CODE:%u STATE:%s", motor->soundResult, dummy.StateName());
+        return;
+    }
+    const uint32_t start = HAL_GetTick();
+    while (HAL_GetTick() - start < 500 && dummy.stopEpoch == epoch &&
+           dummy.robotState == DummyRobot::STATE_NORMAL && !dummy.pauseRequested) {
+        if (SoundExchange(2) && motor->soundHoldActive && motor->soundHoldReady) {
+            if (dummy.stopEpoch == epoch && dummy.robotState == DummyRobot::STATE_NORMAL && !dummy.pauseRequested) {
+                Respond(output, "J1TestStart OK MODE:J1_ONLY HOLD:1 READY:1 STATE:NORMAL");
+                return;
+            }
+        }
+        osDelay(10);
+    }
+    motor->SendSoundTest(0, 0);
+    Respond(output, "J1TestStart Error: not_ready STATE:%s", dummy.StateName());
+}
 void SoundTest(StreamSink& output, char* arguments[], int count, bool query)
 {
     auto* motor = dummy.motorJ[1];
     if (query) {
         if (count != 1) { Respond(output, "J1Sound Error: bad_args"); return; }
         if (!SoundExchange(2)) { Respond(output, "J1Sound Error: no_experiment_ack"); return; }
-        Respond(output, "J1Sound OK EXP:1 SOUND:%u STATE:%s", motor->soundState, dummy.StateName());
+        Respond(output, "J1Sound OK EXP:%u SOUND:%u STATE:%s MODE:%s HOLD:%u READY:%u",
+            motor->soundCapability, motor->soundState, dummy.StateName(),
+            dummy.j1TestMode ? "J1_ONLY" : "ARM", motor->soundHoldActive, motor->soundHoldReady);
         return;
     }
     uint32_t frequency = 0, duration = 0, amplitude = 0;
@@ -217,11 +262,14 @@ void SoundTest(StreamSink& output, char* arguments[], int count, bool query)
         duration < 50 || duration > 500 || amplitude < 25 || amplitude > 250) {
         Respond(output, "J1Sound Error: bad_args"); return;
     }
-    if (!dummy.IsEnabled() || !dummy.IsHomed()) {
+    if (!dummy.j1TestMode && (!dummy.IsEnabled() || !dummy.IsHomed())) {
         Respond(output, "J1Sound Error: require_enabled_and_homed"); return;
     }
     // 先探测专用子板协议，避免向未更新的子板假报成功。
     if (!SoundExchange(2)) { Respond(output, "J1Sound Error: no_experiment_ack"); return; }
+    if (dummy.j1TestMode && (motor->soundCapability != 2 || !motor->soundHoldActive || !motor->soundHoldReady)) {
+        Respond(output, "J1Sound Error: require_j1_hold STATE:%s", dummy.StateName()); return;
+    }
     const uint32_t epoch = dummy.stopEpoch;
     const bool received = SoundExchange(1, frequency, duration, amplitude);
     if (!received || motor->soundResult != 0 || dummy.stopEpoch != epoch ||
@@ -257,6 +305,11 @@ void Execute(const Message& message)
         Respond(output, "%s Error: state=%s", tag, dummy.StateName());
         return;
     }
+#ifdef J1_SOUND_EXPERIMENT
+    if (dummy.j1TestMode && !AllowedInJ1Test(message.text)) {
+        Respond(output, "%s Error: j1_test_only STATE:%s", tag, dummy.StateName()); return;
+    }
+#endif
     char text[128];
     memcpy(text, message.text, sizeof(text));
     char* arguments[8];
@@ -276,6 +329,9 @@ void Execute(const Message& message)
             Respond(output, "FAULT:%s NODE:%lu AGE_MS:%lu ERROR_DEG:%.2f FINISHED:%lu STALLED:%lu",
                     fault.reason, fault.node, fault.feedbackAge, fault.error, fault.finished, fault.stalled);
             Respond(output, "ENABLED:%u HOMED:%u ACTIVE:%u QUEUE:%lu", dummy.IsEnabled(), dummy.IsHomed(), dummy.TaskActive(), 16 - dummy.commandHandler.GetSpace());
+#ifdef J1_SOUND_EXPERIMENT
+            Respond(output, "J1_TEST_MODE:%u", dummy.j1TestMode);
+#endif
             for (int n = 1; n <= 7; ++n) {
                 auto* motor = dummy.motorJ[n];
                 const uint32_t received = motor->lastResponseTick;
@@ -364,6 +420,7 @@ void Execute(const Message& message)
         Respond(output, "%s Error: busy", tag); return;
     }
 #ifdef J1_SOUND_EXPERIMENT
+    if (!strcmp(command, "!J1_TEST_START")) { StartJ1Test(output, count); return; }
     if (!strcmp(command, "!J1_SOUND")) { SoundTest(output, arguments, count, false); return; }
 #endif
     if (!strcmp(command, "!HD_I") && count == 2) {
@@ -507,6 +564,11 @@ void Receive(const char* input, size_t length, StreamSink& baseOutput)
     if (!Query(command) && dummy.robotState != DummyRobot::STATE_NORMAL) {
         Respond(output, "%s Error: state=%s", tag, dummy.StateName()); return;
     }
+#ifdef J1_SOUND_EXPERIMENT
+    if (dummy.j1TestMode && !AllowedInJ1Test(command)) {
+        Respond(output, "%s Error: j1_test_only STATE:%s", tag, dummy.StateName()); return;
+    }
+#endif
     message.channel = output.channelType;
     if (Action(command)) {
         if (!ValidAction(command)) { Respond(output, "%s Error: bad_args", tag); return; }

@@ -161,11 +161,15 @@ public:
 #ifdef J1_SOUND_EXPERIMENT
         SoundPulse soundPulse;
         uint8_t StartSound(uint16_t frequency, uint16_t duration, uint16_t amplitude);
+        uint8_t PrepareSoundHold();
+        bool SoundHoldReady() const;
+        bool soundHoldActive = false;
 #endif
 
     private:
 #ifdef J1_SOUND_EXPERIMENT
         int32_t soundCurrent = 0;
+        bool soundPositionReady = false;
 #endif
         Motor* context;
         int32_t realLapPosition{};

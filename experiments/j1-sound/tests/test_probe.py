@@ -8,9 +8,12 @@ import probe
 
 
 class SerialProbe:
-    def __init__(self, ready=True, version="1.2.1-exp1"):
+    def __init__(self, ready=True, version="1.2.1-exp1", j1_only=False, capability=2):
         self.ready = ready
         self.version = version
+        self.j1_only = j1_only
+        self.prepared = False
+        self.capability = capability
         self.commands = []
         self.pending = bytearray()
         self.is_open = False
@@ -31,9 +34,15 @@ class SerialProbe:
         prefix = "R:" + transaction[2:] + " "
         if command == "#STATUS":
             lines = ["Status OK STATE:NORMAL", f"FW:{self.version} BUILD:test",
-                     f"ENABLED:1 HOMED:{int(self.ready)} ACTIVE:0 QUEUE:0", "Status End"]
+                     ("ENABLED:0 HOMED:0 ACTIVE:0 QUEUE:0" if self.j1_only else
+                      f"ENABLED:1 HOMED:{int(self.ready)} ACTIVE:0 QUEUE:0"), "Status End"]
         elif command == "#J1_SOUND":
-            lines = ["J1Sound OK EXP:1 SOUND:0 STATE:NORMAL"]
+            mode = "J1_ONLY" if self.prepared else "ARM"
+            lines = [f"J1Sound OK EXP:{self.capability} SOUND:0 STATE:NORMAL MODE:{mode} "
+                     f"HOLD:{int(self.prepared)} READY:{int(self.prepared and self.ready)}"]
+        elif command == "!J1_TEST_START":
+            self.prepared = True
+            lines = ["J1TestStart OK MODE:J1_ONLY HOLD:1 READY:1 STATE:NORMAL"]
         elif command == "#GETJPOS":
             lines = ["GetJPos OK 0 0 90 0 0 0 H:0"]
         else:
@@ -78,6 +87,35 @@ class ProbeTests(unittest.TestCase):
         self.execute(device, "--play")
         self.assertEqual([command for command in device.commands if command.startswith("!")],
                          ["!J1_SOUND 1000 200 50"])
+
+    def test_j1_flag_alone_remains_read_only(self):
+        device = SerialProbe(version="1.3.1-exp2", j1_only=True)
+        self.execute(device, "--j1-only")
+        self.assertTrue(all(command.startswith("#") for command in device.commands))
+
+    def test_single_j1_requires_explicit_prepare(self):
+        device = SerialProbe(version="1.3.1-exp2", j1_only=True)
+        with self.assertRaises(RuntimeError):
+            self.execute(device, "--j1-only", "--play")
+        self.assertTrue(all(command.startswith("#") for command in device.commands))
+
+    def test_single_j1_prepare_never_sends_arm_motion(self):
+        device = SerialProbe(version="1.3.1-exp2", j1_only=True)
+        self.execute(device, "--j1-only", "--prepare", "--play")
+        self.assertEqual([command for command in device.commands if command.startswith("!")],
+                         ["!J1_TEST_START", "!J1_SOUND 1000 200 50"])
+
+    def test_old_board_cannot_prepare_single_j1(self):
+        device = SerialProbe(version="1.3.1-exp2", j1_only=True, capability=1)
+        with self.assertRaises(RuntimeError):
+            self.execute(device, "--j1-only", "--prepare", "--play")
+        self.assertTrue(all(command.startswith("#") for command in device.commands))
+
+    def test_unready_single_j1_cannot_play_after_prepare(self):
+        device = SerialProbe(ready=False, version="1.3.1-exp2", j1_only=True)
+        with self.assertRaises(RuntimeError):
+            self.execute(device, "--j1-only", "--prepare", "--play")
+        self.assertNotIn("!J1_SOUND 1000 200 50", device.commands)
 
 
 if __name__ == "__main__":
