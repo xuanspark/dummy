@@ -866,4 +866,7 @@ class Robot:
             if match:
                 key = {"ACC": "acc", "SPEED": "speed", "CURRENT": "i_limit"}[match[2]]
                 self._motion_limits.setdefault(int(match[1]), {})[key] = float(match[3])
-        return self._motion_limits
+        if node is None:
+            return self._motion_limits
+        selected = self._motion_limits.get(int(node), {})
+        return {int(node): dict(selected)}
