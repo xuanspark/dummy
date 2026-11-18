@@ -387,19 +387,19 @@ class Robot:
     async def resume(self) -> None:
         await self._send_priority("!RESUME", timeout=2.0)
 
-    def _clamp_speed(self, speed: Optional[float]) -> tuple[Optional[float], str]:
+    def _clamp_speed(self, speed: Optional[float], limits: dict[int, dict[str, float]]) -> tuple[Optional[float], str]:
         if speed is None:
             return None, ""
-        caps = [v["speed"] for v in self._motion_limits.values()
+        caps = [v["speed"] for v in limits.values()
                 if "speed" in v and v["speed"] > 0]
         if not caps:
-            return speed, ""
+            raise RobotError("实时速度限制不可用", P.ErrorCategory.COMM_TIMEOUT)
         applied = min([speed, *caps])
         if applied < speed:
             return applied, f"速度 {speed:g} 超过已保存上限，已按 {applied:g} 执行"
         return speed, ""
 
-    def _prepare_cached_limit_command(self, command: str) -> str:
+    async def _prepare_limit_command(self, command: str) -> str:
         """Clamp manual motion/current commands using the connection snapshot."""
         self.last_limit_warning = ""
         self.last_applied_command = command
@@ -410,7 +410,8 @@ class Robot:
                     requested = float(parts[-1])
                 except ValueError:
                     return command
-                applied, warning = self._clamp_speed(requested)
+                limits = await self.get_motion_limits()
+                applied, warning = self._clamp_speed(requested, limits)
                 if applied is not None and applied < requested:
                     parts[-1] = f"{applied:g}"
                     command = ",".join(parts)
@@ -420,8 +421,11 @@ class Robot:
                 requested = float(command.split(None, 1)[1])
             except (IndexError, ValueError):
                 return command
-            limit = self._motion_limits.get(7, {}).get("i_limit")
-            if limit is not None and requested > limit:
+            limits = await self.get_motion_limits(7)
+            limit = limits.get(7, {}).get("i_limit")
+            if limit is None:
+                raise RobotError("实时手爪电流限制不可用", P.ErrorCategory.COMM_TIMEOUT)
+            if requested > limit:
                 command = f"!HD_I {limit:g}"
                 self.last_limit_warning = f"手爪电流 {requested:g} 超过已保存上限，已按 {limit:g} 执行"
         self.last_applied_command = command
@@ -430,7 +434,8 @@ class Robot:
     async def move_j(self, j: list[float], speed: Optional[float] = None) -> dict:
         """``&j1..j6[,speed]`` — pass ``speed=None`` to use the firmware's current speed."""
         requested_speed = speed
-        speed, warning = self._clamp_speed(speed)
+        limits = await self.get_motion_limits() if speed is not None else {}
+        speed, warning = self._clamp_speed(speed, limits)
         self.last_limit_warning = warning
         command = P.cmd_move_j(j, speed)
         self.last_applied_command = command
@@ -440,7 +445,8 @@ class Robot:
     async def move_l(self, pose: list[float], speed: Optional[float] = None) -> dict:
         """``@x,y,z,a,b,c[,speed]`` — pass ``speed=None`` to use the firmware's current speed."""
         requested_speed = speed
-        speed, warning = self._clamp_speed(speed)
+        limits = await self.get_motion_limits() if speed is not None else {}
+        speed, warning = self._clamp_speed(speed, limits)
         self.last_limit_warning = warning
         command = P.cmd_move_l(pose, speed)
         self.last_applied_command = command
@@ -503,7 +509,7 @@ class Robot:
             cmd = P.normalize_command(cmd)
         except ValueError as error:
             raise RobotError(str(error), P.ErrorCategory.BAD_ARGS) from error
-        cmd = self._prepare_cached_limit_command(cmd)
+        cmd = await self._prepare_limit_command(cmd)
         warning = self.last_limit_warning
         applied_command = cmd
         if cmd in {"!STOP", "!PAUSE", "!RESUME"}:
@@ -725,7 +731,10 @@ class Robot:
         # Firmware uses %f parse; trim trailing zeros for cleaner wire output
         s = f"{a:.3f}".rstrip('0').rstrip('.')
         requested_amps = amps
-        limit = self._motion_limits.get(7, {}).get("i_limit")
+        fresh_limits = await self.get_motion_limits(7)
+        limit = fresh_limits.get(7, {}).get("i_limit")
+        if limit is None:
+            raise RobotError("实时手爪电流限制不可用", P.ErrorCategory.COMM_TIMEOUT)
         if limit is not None:
             amps = min(amps, limit)
             self.last_limit_warning = (
@@ -858,15 +867,21 @@ class Robot:
     async def get_motion_limits(self, node: Optional[int] = None) -> dict[int, dict[str, float]]:
         """读取保存限制与当前有效值，并缓存保存限制供动作命令限幅。"""
         cmd = "#GETLIMIT all" if node is None else f"#GETLIMIT {int(node)}"
+        fresh: dict[int, dict[str, float]] = {}
         lines = await self._collect_lines(cmd, lambda line: line.startswith("GetLimit Begin") or line.startswith("GetLimit Error"), quiet_ms=120, total_timeout=3.0)
         if any(line.startswith("GetLimit Error") for line in lines):
+            self._motion_limits.clear()
             raise RobotError("读取运动限制失败", P.ErrorCategory.COMM_TIMEOUT)
         for line in lines:
             match = re.match(r"LIMIT NODE:(\d+) (ACC|SPEED|CURRENT):([0-9.+-eE]+)", line)
             if match:
                 key = {"ACC": "acc", "SPEED": "speed", "CURRENT": "i_limit"}[match[2]]
-                self._motion_limits.setdefault(int(match[1]), {})[key] = float(match[3])
+                fresh.setdefault(int(match[1]), {})[key] = float(match[3])
+        expected_nodes = [int(node)] if node is not None else list(range(1, 8))
+        if any(set(fresh.get(item, {})) != {"acc", "speed", "i_limit"} for item in expected_nodes):
+            self._motion_limits.clear()
+            raise RobotError("实时运动限制参数不完整", P.ErrorCategory.COMM_TIMEOUT)
+        self._motion_limits = fresh
         if node is None:
-            return self._motion_limits
-        selected = self._motion_limits.get(int(node), {})
-        return {int(node): dict(selected)}
+            return fresh
+        return {int(node): dict(fresh[int(node)])}
