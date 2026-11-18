@@ -267,6 +267,17 @@ bool DummyRobot::Shutdown()
         uint32_t epoch = stopEpoch;
         if (!Resting()) return false;
         while (robotState != STATE_NORMAL) osDelay(5);
+        // 回零完成后再闭合手爪；手爪失能时先恢复使能，确保 CLOSE 的安全收拢动作可执行。
+        if (!hand2->isEnabled() && !SetHandEnable(true)) return false;
+        if (!RunHand("!HD_C", false)) {
+            if (epoch != stopEpoch || robotState != STATE_NORMAL) continue;
+            return false;
+        }
+        while (robotState != STATE_NORMAL) osDelay(5);
+        if (epoch != stopEpoch) continue;
+        // 手爪动作可能超过机械臂反馈新鲜度窗口，失能前重新请求六个关节反馈。
+        UpdateJointAngles();
+        osDelay(30);
         if (Disable()) return true;
         if (epoch == stopEpoch && robotState == STATE_NORMAL) return false;
         // 回零结束与失能发送之间发生 STOP 时，恢复后重新校验回零再失能。
@@ -417,9 +428,9 @@ bool DummyRobot::RunPose(const DOF6Kinematic::Joint6D_t& pose, float speed)
     return false;
 }
 
-bool DummyRobot::RunHand(const char* command)
+bool DummyRobot::RunHand(const char* command, bool ensureHomed)
 {
-    if (!EnsureHomed() || !WaitReady() || !hand2->isEnabled()) return false;
+    if ((ensureHomed && !EnsureHomed()) || !WaitReady() || !hand2->isEnabled()) return false;
     float percent = 0;
     const bool opening = strcmp(command, "!HD_O") == 0;
     const bool closing = strcmp(command, "!HD_C") == 0;

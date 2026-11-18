@@ -195,7 +195,10 @@ int main()
         Send("!RESUME"); RunOne();
         Require(fabsf(dummy.currentJoints.a[0] - 60) < 0.5f, "resume_next_command");
 
-        Reset(); unsigned before = disableCount; bool intercepted = false;
+        Reset();
+        handPosition = -5.0f;
+        dummy.hand2->UpdateAngleCallback(handPosition, true, true);
+        unsigned before = disableCount; bool intercepted = false;
         Send("!CLOSE");
         delayHook = [&] {
             if (!intercepted && dummy.IsMoving()) { intercepted = true; Send("!STOP"); }
@@ -205,7 +208,8 @@ int main()
             }
         };
         RunOne(); delayHook = {};
-        Require(intercepted && !dummy.IsEnabled() && disableCount > before, "close_disables_after_resumed_return");
+        Require(intercepted && handPosition >= 0 && !dummy.IsEnabled() && disableCount > before,
+                "close_closes_hand_before_disable");
         before = brakeCount;
         Send("!STOP"); dummy.ApplyEmergencyBrake();
         Require(!dummy.IsEnabled() && !dummy.hand2->isEnabled() && brakeCount == before,

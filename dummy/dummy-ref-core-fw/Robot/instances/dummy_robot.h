@@ -296,14 +296,15 @@ public:
     bool Resting();
     // !START：使能机械臂 + 使能手爪 + 回零点姿态（REST_POSE）。会重置 isHomed=false。
     bool Startup();
-    // !CLOSE：先回零点姿态 → 然后失能机械臂+手爪。会重置 isHomed=false。
+    // !CLOSE：先回零点姿态 → 闭合手爪 → 然后失能机械臂+手爪。会重置 isHomed=false。
     bool Shutdown();
     bool Disable();
     bool SetHandEnable(bool enabled);
     bool EnsureHomed();
     bool WaitReady();
     bool RunPose(const DOF6Kinematic::Joint6D_t& pose, float speed);
-    bool RunHand(const char* command);
+    // ensureHomed=false 仅用于 CLOSE 回零后的手爪收拢，避免再次触发工作姿态 HOME。
+    bool RunHand(const char* command, bool ensureHomed = true);
     bool TaskActive() const { return taskActive; }
     const char* StateName() const;
     struct MotionFault {
