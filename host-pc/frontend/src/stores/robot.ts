@@ -101,6 +101,15 @@ export const useRobotStore = defineStore('robot', () => {
       if (state && !/^Close OK/.test(l)) applyMotionState(state[1].toUpperCase())
     } else if (msg.type === 'response') {
       // parsed response already in log line; nothing to do unless we want colour
+      if (msg.warning) {
+        limitWarning.value = msg.warning
+        pushLog(`限制提醒：${msg.warning}（实际发送：${msg.applied_command || '未知'}）`, 'info')
+      }
+    } else if (msg.type === 'command_result') {
+      if (msg.warning) {
+        limitWarning.value = msg.warning
+        pushLog(`限制提醒：${msg.warning}（实际发送：${msg.applied_command || '未知'}）`, 'info')
+      }
     } else if (msg.type === 'error') {
       pushLog(`通信错误：${msg.reason}`, 'err')
     }

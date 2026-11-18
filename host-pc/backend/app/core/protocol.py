@@ -92,6 +92,8 @@ class Response:
     ok: bool
     rest: str = ""      # everything after "OK " (may be empty)
     error: str = ""     # populated when ok=False
+    warning: str = ""   # 上位机校验或自动限幅提醒
+    applied_command: str = ""  # 上位机实际发送的指令
     # T12: 分类后的错误码（ok=True 时为 UNKNOWN，无意义）
     error_category: ErrorCategory = field(default=ErrorCategory.UNKNOWN)
 

@@ -169,9 +169,11 @@ async def test_raw_motion_command_uses_cached_limit_and_returns_warning(correlat
         return [f"R:{request} Move OK"]
 
     transport.on(lambda wire: unpack(wire)[1].startswith("&"), reply)
-    await robot.raw("&0,0,90,0,0,0,100")
+    response = await robot.raw("&0,0,90,0,0,0,100")
     assert transport.tx_log[-1].endswith(",20")
     assert "20" in robot.last_limit_warning
+    assert response.applied_command.endswith(",20")
+    assert "20" in response.warning
 
 
 async def test_raw_hand_current_uses_cached_limit(correlated_pair):
@@ -184,9 +186,30 @@ async def test_raw_hand_current_uses_cached_limit(correlated_pair):
         return [f"R:{request} HD_I OK current=0.5"]
 
     transport.on(lambda wire: unpack(wire)[1].startswith("!HD_I"), reply)
-    await robot.raw("!HD_I 1.2")
+    response = await robot.raw("!HD_I 1.2")
     assert transport.tx_log[-1].endswith("!HD_I 0.5")
     assert "0.5" in robot.last_limit_warning
+    assert response.applied_command == "!HD_I 0.5"
+    assert "0.5" in response.warning
+
+
+async def test_raw_limit_warning_is_bound_to_each_response(correlated_pair):
+    robot, transport = correlated_pair
+    robot._motion_limits = {1: {"speed": 20.0}}
+
+    def reply(wire):
+        request, command = unpack(wire)
+        return [f"R:{request} Move OK command={command}"]
+
+    transport.on(lambda wire: unpack(wire)[1].startswith("&"), reply)
+    first, second = await asyncio.gather(
+        robot.raw("&0,0,90,0,0,0,100"),
+        robot.raw("&0,0,90,0,0,0,10"),
+    )
+    assert first.applied_command.endswith(",20")
+    assert "20" in first.warning
+    assert second.applied_command.endswith(",10")
+    assert second.warning == ""
 
 
 @pytest.mark.parametrize("command", ["!HOME\n!CLOSE", "#GETSPEED\r!STOP", "!DISABLE"])
@@ -259,3 +282,38 @@ def test_websocket_stop_is_received_while_home_is_pending():
             else:
                 pytest.fail("STOP 未能在 HOME 等待期间完成")
         assert len(transport.tx_log) == 2
+
+
+def test_websocket_raw_returns_limit_warning_for_submitted_command():
+    from fastapi.testclient import TestClient
+    from app.main import app
+
+    transport = FakeTransport()
+    transport.connected = True
+
+    def reply(wire):
+        request, command = unpack(wire)
+        if command.startswith("&"):
+            return [f"R:{request} Move OK"]
+        return []
+
+    transport.on(lambda _: True, reply)
+    with TestClient(app) as client:
+        async def setup():
+            robot = Robot(transport, correlated=True)
+            robot._motion_limits = {1: {"speed": 20.0}}
+            await robot.start()
+            app.state.manager._robot = robot
+
+        client.portal.call(setup)
+        with client.websocket_connect("/ws") as websocket:
+            assert websocket.receive_json()["type"] == "state"
+            websocket.send_json({"type": "raw", "command": "&0,0,90,0,0,0,100"})
+            for _ in range(8):
+                message = websocket.receive_json()
+                if message.get("type") == "command_result":
+                    assert message["applied_command"].endswith(",20")
+                    assert "20" in message["warning"]
+                    break
+            else:
+                pytest.fail("WebSocket 未返回本次原始指令的限幅提醒")

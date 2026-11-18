@@ -185,7 +185,8 @@ export type WsMessage =
       jpos: JointPos | null; lpos: CartPos | null; speed: number | null; message?: string; motion_state?: string
       limits_ready?: boolean; motion_limits?: MotionLimits; limit_warning?: string }
   | { type: 'log'; line: string; noise?: boolean }
-  | { type: 'response'; tag: string; ok: boolean; rest: string; error: string }
+  | { type: 'response'; tag: string; ok: boolean; rest: string; error: string; warning?: string; applied_command?: string }
+  | { type: 'command_result'; tag: string; ok: boolean; rest: string; error: string; raw: string; warning?: string; applied_command?: string }
   | { type: 'pong' }
   | { type: 'error'; reason: string }
 

@@ -10,7 +10,7 @@ import logging
 import re
 import secrets
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Optional
 
 from app.core import protocol as P
@@ -504,11 +504,15 @@ class Robot:
         except ValueError as error:
             raise RobotError(str(error), P.ErrorCategory.BAD_ARGS) from error
         cmd = self._prepare_cached_limit_command(cmd)
+        warning = self.last_limit_warning
+        applied_command = cmd
         if cmd in {"!STOP", "!PAUSE", "!RESUME"}:
-            return await self._send_priority(cmd, timeout)
+            response = await self._send_priority(cmd, timeout)
+            return replace(response, warning=warning, applied_command=applied_command)
         if cmd in {"!DISABLE"}:
             raise RobotError("请使用 START 或 CLOSE 管理使能状态", P.ErrorCategory.STATE_BLOCKED)
-        return await self._exec(cmd, timeout=timeout or (300 if cmd.startswith(("&", "@", ">", "!START", "!CLOSE", "!HOME", "!RESET", "!HD_")) else None))
+        response = await self._exec(cmd, timeout=timeout or (300 if cmd.startswith(("&", "@", ">", "!START", "!CLOSE", "!HOME", "!RESET", "!HD_")) else None))
+        return replace(response, warning=warning, applied_command=applied_command)
 
     # ---- internal: multi-line command with quiet-window aggregation ----
     async def _collect_lines(self, cmd: str, start_predicate,

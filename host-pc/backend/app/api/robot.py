@@ -457,6 +457,6 @@ async def raw(body: RawCmd, r: Robot = Depends(get_robot)):
         "rest": resp.rest,
         "error": resp.error,
         "raw": resp.raw,
-        "warning": r.last_limit_warning,
-        "applied_command": r.last_applied_command,
+        "warning": resp.warning,
+        "applied_command": resp.applied_command,
     }

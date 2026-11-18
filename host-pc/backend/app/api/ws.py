@@ -113,7 +113,7 @@ async def ws_endpoint(websocket: WebSocket) -> None:
                     if cmd.startswith(_DANGEROUS_PREFIXES):
                         raise ValueError("该指令请使用专用参数接口")
                     # 独立任务等待动作结果，接收循环继续处理 STOP。
-                    task = asyncio.create_task(robot.raw(cmd))
+                    task = asyncio.create_task(send_raw_result(cmd))
                     command_tasks.add(task)
                     task.add_done_callback(command_done)
                 except Exception as e:  # noqa: BLE001
@@ -122,6 +122,20 @@ async def ws_endpoint(websocket: WebSocket) -> None:
                 await websocket.send_text(json.dumps({"type": "error", "reason": f"unknown_type:{kind}"}))
 
     command_tasks: set[asyncio.Task] = set()
+
+    async def send_raw_result(command: str) -> None:
+        """向提交原始指令的客户端返回本次指令对应的上位机提醒。"""
+        response = await robot.raw(command)
+        await websocket.send_text(json.dumps({
+            "type": "command_result",
+            "tag": response.tag,
+            "ok": response.ok,
+            "rest": response.rest,
+            "error": response.error,
+            "raw": response.raw,
+            "warning": response.warning,
+            "applied_command": response.applied_command,
+        }, ensure_ascii=False))
 
     def command_done(task: asyncio.Task) -> None:
         command_tasks.discard(task)

@@ -112,8 +112,12 @@ Server → client:
 ```json
 {"type":"log",      "line":"Move OK"}
 {"type":"response", "tag":"Move", "ok":true, "rest":"", "error":""}
+{"type":"command_result", "tag":"Move", "ok":true, "rest":"", "error":"", "warning":"速度 100 超过已保存上限，已按 20 执行", "applied_command":"&0,0,90,0,0,0,20"}
 {"type":"state",    "jpos":{"j1":0,...,"hand":0}, "lpos":null, "speed":null}
 ```
+
+`command_result` 只返回提交该原始指令的客户端对应结果，其中 `warning` 和
+`applied_command` 由上位机按本次请求生成，避免并发指令之间串用限制提醒。
 
 Client → server:
 ```json
