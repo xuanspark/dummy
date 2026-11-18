@@ -134,6 +134,7 @@ static void Reset()
     dummy.commandHandler.ClearFifo();
     dummy.scheduledActions = 0;
     dummy.taskActive = false;
+    dummy.pauseRequested = false;
     dummy.SetEnable(true);
     dummy.hand2->SetEnable(true);
     frozen = false;
@@ -187,9 +188,18 @@ int main()
         Reset();
         Send("&50,0,90,0,0,0,30"); Send("&60,0,90,0,0,0,30");
         bool paused = false;
-        delayHook = [&] { if (!paused && dummy.IsMoving()) { paused = true; Send("!PAUSE"); } };
+        bool pausePendingObserved = false;
+        delayHook = [&] {
+            if (!paused && dummy.IsMoving()) {
+                paused = true;
+                Send("!PAUSE");
+                pausePendingObserved = dummy.robotState == DummyRobot::STATE_NORMAL &&
+                    dummy.IsPausePending() && std::string(dummy.StateName()) == "PAUSE_PENDING";
+            }
+        };
         RunOne(); delayHook = {};
-        Require(paused && dummy.robotState == DummyRobot::STATE_PAUSED, "soft_pause_state");
+        Require(paused && pausePendingObserved && dummy.robotState == DummyRobot::STATE_PAUSED,
+                "soft_pause_state_after_action");
         Require(fabsf(dummy.currentJoints.a[0] - 50) < 0.5f && dummy.commandHandler.GetSpace() == 15, "soft_pause_finishes_only_current");
         Send("!STOP"); Require(dummy.robotState == DummyRobot::STATE_EMERGENCY_STOP, "pause_escalates");
         Send("!RESUME"); RunOne();

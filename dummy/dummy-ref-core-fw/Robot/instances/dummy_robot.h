@@ -323,6 +323,8 @@ public:
     bool CanTransmit(uint8_t command, const uint8_t* data) const;
     volatile uint32_t stopEpoch = 0;
     volatile bool taskActive = false;
+    // 运动中的暂停先登记，当前指令完成后再切换到 PAUSED。
+    volatile bool pauseRequested = false;
     volatile uint32_t scheduledActions = 0;
     volatile bool maintenanceActive = false;
     // 手爪动作的 RGB 联动 hook。open=true → 工作状态(绿)，false → 完成状态(青，5s回待机)。
@@ -330,6 +332,7 @@ public:
     bool IsMoving();
     bool IsEnabled();
     bool IsHomed() const { return isHomed; }
+    bool IsPausePending() const { return pauseRequested; }
     void InvalidateHome() { isHomed = false; }
     float GetJointSpeed() const { return jointSpeed; }
     void SetCommandMode(uint32_t _mode);

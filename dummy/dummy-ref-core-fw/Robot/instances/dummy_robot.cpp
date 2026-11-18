@@ -44,6 +44,7 @@ void DummyRobot::Init()
 }
 const char* DummyRobot::StateName() const
 {
+    if (pauseRequested && robotState == STATE_NORMAL) return "PAUSE_PENDING";
     switch (robotState) {
         case STATE_EMERGENCY_STOP: return "EMERGENCY_STOP";
         case STATE_PAUSED: return "PAUSED";
@@ -60,6 +61,7 @@ void DummyRobot::CaptureEmergencyHoldPose()
 }
 void DummyRobot::RequestEmergencyStopFromISR()
 {
+    pauseRequested = false;
     if (robotState != STATE_EMERGENCY_STOP) {
         restoreEnablePending = enableTransitionActive;
         CaptureEmergencyHoldPose();
@@ -73,6 +75,7 @@ void DummyRobot::RequestEmergencyStop()
 {
     uint32_t mask = __get_PRIMASK();
     __disable_irq();
+    pauseRequested = false;
     if (robotState != STATE_EMERGENCY_STOP) {
         restoreEnablePending = enableTransitionActive;
         CaptureEmergencyHoldPose();
@@ -163,15 +166,26 @@ bool DummyRobot::CommandHandler::Pause()
     uint32_t mask = __get_PRIMASK();
     __disable_irq();
     bool accepted = context->robotState != STATE_EMERGENCY_STOP;
-    if (accepted) context->robotState = STATE_PAUSED;
+    if (accepted) {
+        if (context->robotState == STATE_PAUSED) {
+            accepted = false;
+        } else if (context->taskActive || context->armMotionActive) {
+            // 当前动作必须完整结束，暂停状态位于两条指令之间。
+            context->pauseRequested = true;
+        } else {
+            context->robotState = STATE_PAUSED;
+        }
+    }
     __set_PRIMASK(mask);
-    if (accepted) context->SetRGBAutoSubState(RGB::AUTO_PAUSED);
+    if (accepted && context->robotState == STATE_PAUSED)
+        context->SetRGBAutoSubState(RGB::AUTO_PAUSED);
     return accepted;
 }
 void DummyRobot::CommandHandler::Resume()
 {
     uint32_t mask = __get_PRIMASK();
     __disable_irq();
+    context->pauseRequested = false;
     context->robotState = STATE_NORMAL;
     context->emergencyHoldActive = false;
     context->emergencyBrakeEpoch = 0xffffffffu;
@@ -484,7 +498,7 @@ bool DummyRobot::RunHand(const char* command, bool ensureHomed)
 
 uint32_t DummyRobot::CommandHandler::Push(const std::string& command, uint8_t channel, uint32_t request)
 {
-    if (context->robotState != STATE_NORMAL) return 0xfe;
+    if (context->robotState != STATE_NORMAL || context->pauseRequested) return 0xfe;
     if (command != "!START" && !context->IsEnabled()) return 0xfd;
     if (command.empty() || command.size() >= sizeof(CommandMessage::text)) return 0xfb;
     CommandMessage message{};
@@ -493,7 +507,7 @@ uint32_t DummyRobot::CommandHandler::Push(const std::string& command, uint8_t ch
     message.request = request;
     uint32_t mask = __get_PRIMASK();
     __disable_irq();
-    if (context->maintenanceActive || context->robotState != STATE_NORMAL) {
+    if (context->maintenanceActive || context->robotState != STATE_NORMAL || context->pauseRequested) {
         bool busy = context->maintenanceActive;
         __set_PRIMASK(mask);
         return busy ? 0xfc : 0xfe;
@@ -574,8 +588,14 @@ uint32_t DummyRobot::CommandHandler::ParseCommand(const std::string& command)
     __disable_irq();
     context->taskActive = false;
     --context->scheduledActions;
+    const bool pauseAfterAction = context->pauseRequested && context->robotState == STATE_NORMAL;
+    if (pauseAfterAction) {
+        context->pauseRequested = false;
+        context->robotState = STATE_PAUSED;
+    }
     __set_PRIMASK(mask);
-    context->NotifyWorkDone();
+    if (pauseAfterAction) context->SetRGBAutoSubState(RGB::AUTO_PAUSED);
+    else context->NotifyWorkDone();
     TransactionSink output(Output(activeChannel), activeRequest);
     if (ok && command == "!HD_ZERO")
         Respond(output, "HD_ZERO OK MIN:%.2f MAX:%.2f STATE:%s", context->hand2->ClosedAngle,
