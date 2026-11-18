@@ -159,7 +159,7 @@ async def test_bad_pid_never_sent(correlated_pair, values):
     assert not transport.tx_log
 
 
-@pytest.mark.parametrize("command", ["!HOME\n!CLOSE", "#GETSPEED\r!STOP", "!HD_DIS", "!HD_EN", "!DISABLE"])
+@pytest.mark.parametrize("command", ["!HOME\n!CLOSE", "#GETSPEED\r!STOP", "!DISABLE"])
 async def test_bypass_commands_never_sent(correlated_pair, command):
     robot, transport = correlated_pair
     with pytest.raises(RobotError):

@@ -198,7 +198,7 @@ void usb_rx_process_packet(uint8_t *buf, uint32_t len, uint8_t endpoint_pair)
     if (endpoint_pair == CDC_interface.out_ep && len > 0)
     {
         if (usbStopScanner.Feed(buf, len))
-            dummy.RequestEmergencyStop();
+            dummy.RequestEmergencyStopFromISR();
     }
 
     // 在上一个包被处理完之前，下一个 USB 包不会进入。

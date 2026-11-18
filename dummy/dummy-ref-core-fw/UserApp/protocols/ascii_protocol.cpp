@@ -58,7 +58,8 @@ bool Action(const char* command)
 {
     return strchr("&@>", command[0]) || Is(command, "!START") || Is(command, "!HOME") ||
         Is(command, "!RESET") || Is(command, "!CLOSE") || Is(command, "!HD_O") ||
-        Is(command, "!HD_C") || Is(command, "!HD_POS") || Is(command, "!HD_ZERO") || Is(command, "!CALIBRATION");
+        Is(command, "!HD_C") || Is(command, "!HD_POS") || Is(command, "!HD_ZERO") ||
+        Is(command, "!HD_EN") || Is(command, "!HD_DIS") || Is(command, "!CALIBRATION");
 }
 bool Unsigned(const char* token, uint32_t& value)
 {
@@ -276,7 +277,7 @@ void Execute(const Message& message)
             dummy.SetRGBMode(8); Respond(output, "RGB_CUSTOM OK"); return;
         }
     }
-    if (!strcmp(command, "!HD_EN") || !strcmp(command, "!HD_DIS") || !strcmp(command, "!DISABLE")) {
+    if (!strcmp(command, "!DISABLE")) {
         Respond(output, "%s Error: use !START or !CLOSE", tag); return;
     }
     struct MaintenanceGuard {

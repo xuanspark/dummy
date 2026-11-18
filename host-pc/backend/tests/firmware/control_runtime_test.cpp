@@ -226,8 +226,10 @@ int main()
         Reset(); before = disableCount;
         tick += 300;
         Require(!dummy.Disable() && dummy.IsEnabled() && disableCount == before, "disable_requires_fresh_rest_feedback");
-        Send("!HD_DIS"); ProcessAsciiCommand(0);
-        Require(dummy.IsEnabled() && dummy.hand2->isEnabled(), "direct_disable_rejected");
+        Send("!HD_DIS"); RunOne();
+        Require(dummy.IsEnabled() && !dummy.hand2->isEnabled(), "hand_disable_command");
+        Send("!HD_EN"); RunOne();
+        Require(dummy.IsEnabled() && dummy.hand2->isEnabled(), "hand_enable_command");
         Send("#SETPID 7 101 202 303 404"); ProcessAsciiCommand(0);
         Require(usb.text.find("SetPid OK") != std::string::npos && gains[7][0] == 101 && gains[7][1] == 404 && gains[7][2] == 202 && gains[7][3] == 303, "pidv_all_order_and_hand");
         Send("#SETPID 1 kv 99"); ProcessAsciiCommand(0);

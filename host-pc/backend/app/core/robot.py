@@ -356,7 +356,7 @@ class Robot:
         await self._exec("!HD_C", timeout=300.0)
 
     async def hand_enable(self, enable: bool) -> None:
-        raise RobotError("手爪随 START 使能，随 CLOSE 回零完成后失能", P.ErrorCategory.STATE_BLOCKED)
+        await self._exec("!HD_EN" if enable else "!HD_DIS", timeout=10.0)
 
     async def hand_pos(self, percent: int) -> None:
         await self._exec(P.cmd_hand_pos(percent), timeout=300.0)
@@ -407,7 +407,7 @@ class Robot:
             raise RobotError(str(error), P.ErrorCategory.BAD_ARGS) from error
         if cmd in {"!STOP", "!PAUSE", "!RESUME"}:
             return await self._send_priority(cmd, timeout)
-        if cmd in {"!HD_DIS", "!HD_EN", "!DISABLE"}:
+        if cmd in {"!DISABLE"}:
             raise RobotError("请使用 START 或 CLOSE 管理使能状态", P.ErrorCategory.STATE_BLOCKED)
         return await self._exec(cmd, timeout=timeout or (300 if cmd.startswith(("&", "@", ">", "!START", "!CLOSE", "!HOME", "!RESET", "!HD_")) else None))
 

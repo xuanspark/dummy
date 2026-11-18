@@ -299,6 +299,7 @@ public:
     // !CLOSE：先回零点姿态 → 然后失能机械臂+手爪。会重置 isHomed=false。
     bool Shutdown();
     bool Disable();
+    bool SetHandEnable(bool enabled);
     bool EnsureHomed();
     bool WaitReady();
     bool RunPose(const DOF6Kinematic::Joint6D_t& pose, float speed);
@@ -316,6 +317,7 @@ public:
     bool TryMotionFault(const char* reason, uint8_t node, float error, uint32_t epoch);
     void PollJointAngle();
     void RequestEmergencyStop();
+    void RequestEmergencyStopFromISR();
     void ApplyEmergencyBrake();
     bool CanTransmit(uint8_t command, const uint8_t* data) const;
     volatile uint32_t stopEpoch = 0;
@@ -407,9 +409,14 @@ private:
     DOF6Kinematic* dof6Solver;
     volatile bool isEnabled = false;
     volatile bool disableAuthorized = false;
+    volatile bool handDisableAuthorized = false;
     volatile bool enableTransitionActive = false;
     volatile bool restoreEnablePending = false;
     volatile bool armMotionActive = false;
+    volatile bool emergencyHoldActive = false;
+    volatile uint32_t emergencyBrakeEpoch = 0xffffffffu;
+    DOF6Kinematic::Joint6D_t emergencyHoldPose = REST_POSE;
+    void CaptureEmergencyHoldPose();
     bool SaveNodeOffset(uint8_t node);
     // 是否已执行过 !HOME 校位。!START / SetEnable(false) 会复位为 false。
     // 运动和手爪命令在未 HOME 时先静默归位。

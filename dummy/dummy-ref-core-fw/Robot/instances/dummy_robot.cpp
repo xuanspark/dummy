@@ -52,13 +52,33 @@ const char* DummyRobot::StateName() const
 }
 
 // 中断只锁存状态并唤醒最高优先级任务，不在中断内等待 CAN 或打印。
+void DummyRobot::CaptureEmergencyHoldPose()
+{
+    for (int n = 1; n <= 6; ++n) {
+        emergencyHoldPose.a[n - 1] = motorJ[n]->angle;
+    }
+}
+void DummyRobot::RequestEmergencyStopFromISR()
+{
+    if (robotState != STATE_EMERGENCY_STOP) {
+        restoreEnablePending = enableTransitionActive;
+        CaptureEmergencyHoldPose();
+        ++stopEpoch;
+        emergencyHoldActive = true;
+        emergencyBrakeEpoch = 0xffffffffu;
+        robotState = STATE_EMERGENCY_STOP;
+    }
+}
 void DummyRobot::RequestEmergencyStop()
 {
     uint32_t mask = __get_PRIMASK();
     __disable_irq();
     if (robotState != STATE_EMERGENCY_STOP) {
         restoreEnablePending = enableTransitionActive;
+        CaptureEmergencyHoldPose();
         ++stopEpoch;
+        emergencyHoldActive = true;
+        emergencyBrakeEpoch = 0xffffffffu;
         robotState = STATE_EMERGENCY_STOP;
     }
     __set_PRIMASK(mask);
@@ -76,6 +96,12 @@ void DummyRobot::ApplyEmergencyBrake()
     if (!isEnabled) return;
     // 广播速度零覆盖关节和手爪；保持原有使能，不改写待恢复目标。
     motorJ[ALL]->SetVelocitySetPoint(0);
+    if (emergencyBrakeEpoch == stopEpoch) return;
+    for (int n = 1; n <= 6; ++n) {
+        const float hold = emergencyHoldPose.a[n - 1];
+        if (std::isfinite(hold)) motorJ[n]->SetAngleWithVelocityLimit(hold, 1.0f);
+    }
+    emergencyBrakeEpoch = stopEpoch;
 }
 bool DummyRobot::CanTransmit(uint8_t command, const uint8_t* data) const
 {
@@ -86,6 +112,7 @@ bool DummyRobot::CanTransmit(uint8_t command, const uint8_t* data) const
             std::memcpy(&enabled, data, sizeof(enabled));
             return enabled == 1;
         }
+        if (command == 0x07 && emergencyHoldActive) return true;
         float value = 1;
         std::memcpy(&value, data, sizeof(value));
         return command == 0x04 && value == 0;
@@ -93,7 +120,7 @@ bool DummyRobot::CanTransmit(uint8_t command, const uint8_t* data) const
     if (command == 0x01) {
         uint32_t enabled;
         std::memcpy(&enabled, data, sizeof(enabled));
-        return robotState == STATE_NORMAL && (enabled != 0 || disableAuthorized);
+        return robotState == STATE_NORMAL && (enabled != 0 || disableAuthorized || handDisableAuthorized);
     }
     // 暂停允许当前任务的内部动作自然完成；入口拒绝所有新业务。
     return robotState == STATE_NORMAL || taskActive;
@@ -146,6 +173,8 @@ void DummyRobot::CommandHandler::Resume()
     uint32_t mask = __get_PRIMASK();
     __disable_irq();
     context->robotState = STATE_NORMAL;
+    context->emergencyHoldActive = false;
+    context->emergencyBrakeEpoch = 0xffffffffu;
     __set_PRIMASK(mask);
     context->SetRGBAutoSubState(context->taskActive ? RGB::AUTO_WORKING : RGB::AUTO_STANDBY);
 }
@@ -195,6 +224,29 @@ bool DummyRobot::Disable()
     bool disabled = SetEnable(false);
     disableAuthorized = false;
     return disabled && !isEnabled;
+}
+bool DummyRobot::SetHandEnable(bool enabled)
+{
+    if (robotState != STATE_NORMAL || !IsEnabled() || armMotionActive) return false;
+    if (enabled) {
+        if (hand2->isEnabled()) return true;
+        const bool result = hand2->SetEnable(true);
+        if (result) {
+            hand2->enabledFlag = true;
+            SetRGBAutoSubState(RGB::AUTO_WORKING);
+        }
+        return result;
+    }
+    if (!hand2->isEnabled()) return true;
+    if (hand2->state == CtrlStepMotor::RUNNING) return false;
+    handDisableAuthorized = true;
+    const bool result = hand2->SetEnable(false);
+    handDisableAuthorized = false;
+    if (result) {
+        hand2->enabledFlag = false;
+        SetRGBAutoSubState(RGB::AUTO_STANDBY);
+    }
+    return result;
 }
 bool DummyRobot::Startup()
 {
@@ -485,6 +537,8 @@ uint32_t DummyRobot::CommandHandler::ParseCommand(const std::string& command)
     else if (command == "!CLOSE") { tag = "Close"; ok = context->Shutdown(); }
     else if (command == "!CALIBRATION") { tag = "Calibration"; ok = context->CalibrateHomeOffset(); }
     else if (command == "!HD_ZERO") { tag = "HD_ZERO"; ok = context->CalibrateHand(); }
+    else if (command == "!HD_EN") { tag = "HD_EN"; ok = context->SetHandEnable(true); }
+    else if (command == "!HD_DIS") { tag = "HD_DIS"; ok = context->SetHandEnable(false); }
     else if (command.compare(0, 4, "!HD_") == 0) {
         tag = command.compare(0, 7, "!HD_POS") == 0 ? "HD_POS" : (command == "!HD_O" ? "HD_O" : "HD_C");
         ok = context->RunHand(command.c_str());
