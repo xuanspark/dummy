@@ -5,6 +5,10 @@
 #include <tim.h>
 #include <math.h>
 
+#if defined(TIM_DMA_CC4)
+extern DMA_HandleTypeDef hdma_tim2_ch2_ch4;
+#endif
+
 #define MAX_LED 12               // 板载 WS2812 灯珠数量（REF 1.0 板）
 #define USE_BRIGHTNESS 0         // 是否启用 Set_Brightness 亮度衰减（默认关闭，节省 CPU）
 #define PI               3.14159265358979f
@@ -136,6 +140,7 @@ public:
             __HAL_TIM_DISABLE_DMA(&htim2, TIM_DMA_CC4);
             CLEAR_BIT(htim2.Instance->CCER, TIM_CCER_CC4E);
             __HAL_TIM_DISABLE(&htim2);
+            (void)HAL_DMA_Abort(&hdma_tim2_ch2_ch4);
 #endif
             dmaActive = false;
             data_sentflag = 0;
