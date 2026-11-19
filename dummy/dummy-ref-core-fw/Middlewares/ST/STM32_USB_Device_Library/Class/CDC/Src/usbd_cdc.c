@@ -65,6 +65,9 @@
 #include <cmsis_os.h>
 #include <freertos_inc.h>
 
+/* USB 类回调可能运行在 OTG_FS 中断上下文。 */
+static USBD_CDC_HandleTypeDef hcdc_static;
+
 /** @addtogroup STM32_USB_DEVICE_LIBRARY
   * @{
   */
@@ -400,15 +403,10 @@ static uint8_t  USBD_CDC_Init (USBD_HandleTypeDef *pdev,
                    CDC_CMD_PACKET_SIZE);
 
 
-    pdev->pClassData = USBD_malloc(sizeof (USBD_CDC_HandleTypeDef));
-
-    if(pdev->pClassData == NULL)
-    {
-        ret = 1;
-    }
-    else
-    {
-        hcdc = (USBD_CDC_HandleTypeDef*) pdev->pClassData;
+    /* 使用静态存储，避免 USB 复位和枚举在中断中进入堆分配。 */
+    USBD_memset(&hcdc_static, 0, sizeof(hcdc_static));
+    pdev->pClassData = &hcdc_static;
+    hcdc = &hcdc_static;
 
         /* Init  physical Interface components */
         ((USBD_CDC_ItfTypeDef *)pdev->pUserData)->Init();
@@ -441,7 +439,6 @@ static uint8_t  USBD_CDC_Init (USBD_HandleTypeDef *pdev,
                                ODRIVE_OUT_EP,
                                hcdc->ODRIVE_Rx.Buffer,
                                CDC_DATA_FS_OUT_PACKET_SIZE);
-    }
     return ret;
 }
 
@@ -482,7 +479,7 @@ static uint8_t  USBD_CDC_DeInit (USBD_HandleTypeDef *pdev,
     if(pdev->pClassData != NULL)
     {
         ((USBD_CDC_ItfTypeDef *)pdev->pUserData)->DeInit();
-        USBD_free(pdev->pClassData);
+        USBD_memset(&hcdc_static, 0, sizeof(hcdc_static));
         pdev->pClassData = NULL;
     }
 
