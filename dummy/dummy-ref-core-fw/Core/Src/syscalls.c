@@ -70,17 +70,22 @@ register char * stack_ptr asm("sp");
 char *__env[1] = { 0 };
 char **environ = __env;
 
-/* Newlib malloc is used by floating-point printf from multiple RTOS tasks. */
 void __malloc_lock(struct _reent *reent)
 {
 	(void) reent;
-	taskENTER_CRITICAL();
+	if (xTaskGetSchedulerState() == taskSCHEDULER_RUNNING)
+		taskENTER_CRITICAL();
+	else
+		__asm volatile ("cpsid i" ::: "memory");
 }
 
 void __malloc_unlock(struct _reent *reent)
 {
 	(void) reent;
-	taskEXIT_CRITICAL();
+	if (xTaskGetSchedulerState() == taskSCHEDULER_RUNNING)
+		taskEXIT_CRITICAL();
+	else
+		__asm volatile ("cpsie i" ::: "memory");
 }
 
 
