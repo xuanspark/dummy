@@ -382,9 +382,12 @@ public:
 
         bool IsReady() const { return commandFifo != nullptr; }
 
-        uint32_t Push(const std::string &_cmd, uint8_t channel = 0, uint32_t request = 0);
+        uint32_t Push(const char* command, uint8_t channel = 0, uint32_t request = 0);
+        bool Pop(char* buffer, size_t capacity, uint32_t timeout);
+        uint32_t ParseCommand(const char* command);
+        // 兼容离线回归测试；固件主线程使用固定缓冲区接口。
         std::string Pop(uint32_t timeout);
-        uint32_t ParseCommand(const std::string &_cmd);
+        uint32_t ParseCommand(const std::string& command);
         uint32_t GetSpace();
         void ClearFifo();
         void EmergencyStop();

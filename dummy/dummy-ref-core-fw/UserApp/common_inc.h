@@ -8,7 +8,7 @@
 #define REF_STM32F4_COMMON_INC_H
 
 #define CONFIG_FW_VERSION 1.1    // 固件版本号，供启动横幅 / Fibre 查询
-#define CONFIG_FW_VERSION_TEXT "1.2.4"
+#define CONFIG_FW_VERSION_TEXT "1.2.5"
 
 /*---------------------------- C 作用域 ---------------------------*/
 // 以下头与声明在 C 与 C++ 中都可见，供 CubeMX 生成的 freertos.c 等调用

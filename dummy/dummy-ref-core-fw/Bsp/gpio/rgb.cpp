@@ -102,6 +102,16 @@ void RGB::Run(RGB::Rgb_style_t mode) {
 // ---------------------------------------------------------------------------
 void RGB::Interrupt(uint8_t flag) {
     data_sentflag = flag;
+    if (flag)
+    {
+        // DMA 完成回调只做寄存器级收尾，避免在中断中调用 HAL_DMA_Abort_IT。
+#if defined(TIM_DMA_CC4) && defined(TIM_CCER_CC4E)
+        __HAL_TIM_DISABLE_DMA(&htim2, TIM_DMA_CC4);
+        CLEAR_BIT(htim2.Instance->CCER, TIM_CCER_CC4E);
+        __HAL_TIM_DISABLE(&htim2);
+#endif
+        dmaActive = false;
+    }
 }
 
 

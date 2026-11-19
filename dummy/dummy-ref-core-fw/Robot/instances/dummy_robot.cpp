@@ -510,13 +510,15 @@ bool DummyRobot::RunHand(const char* command, bool ensureHomed)
     }
 }
 
-uint32_t DummyRobot::CommandHandler::Push(const std::string& command, uint8_t channel, uint32_t request)
+uint32_t DummyRobot::CommandHandler::Push(const char* command, uint8_t channel, uint32_t request)
 {
+    if (!command) return 0xfb;
     if (context->robotState != STATE_NORMAL || context->pauseRequested) return 0xfe;
-    if (command != "!START" && !context->IsEnabled()) return 0xfd;
-    if (command.empty() || command.size() >= sizeof(CommandMessage::text)) return 0xfb;
+    if (strcmp(command, "!START") != 0 && !context->IsEnabled()) return 0xfd;
+    const size_t length = strnlen(command, sizeof(CommandMessage::text));
+    if (length == 0 || length >= sizeof(CommandMessage::text)) return 0xfb;
     CommandMessage message{};
-    std::memcpy(message.text, command.data(), command.size());
+    std::memcpy(message.text, command, length);
     message.channel = channel;
     message.request = request;
     uint32_t mask = __get_PRIMASK();
@@ -528,9 +530,9 @@ uint32_t DummyRobot::CommandHandler::Push(const std::string& command, uint8_t ch
     }
     // 模式 2 在当前动作执行期间直接替换目标，不再把过期目标排到队尾。
     if (context->commandMode == COMMAND_TARGET_POINT_INTERRUPTABLE && context->taskActive &&
-        !command.empty() && command[0] == '&') {
+        command[0] == '&') {
         float values[6] = {};
-        int count = sscanf(command.c_str() + 1, "%f,%f,%f,%f,%f,%f", values, values + 1, values + 2,
+        int count = sscanf(command + 1, "%f,%f,%f,%f,%f,%f", values, values + 1, values + 2,
                            values + 3, values + 4, values + 5);
         if (count == 6 && context->MoveJ(values[0], values[1], values[2], values[3], values[4], values[5]))
             return 0xfa;
@@ -542,14 +544,22 @@ uint32_t DummyRobot::CommandHandler::Push(const std::string& command, uint8_t ch
     if (status != osOK) return 0xff;
     return GetSpace();
 }
-std::string DummyRobot::CommandHandler::Pop(uint32_t timeout)
+bool DummyRobot::CommandHandler::Pop(char* buffer, size_t capacity, uint32_t timeout)
 {
+    if (!buffer || capacity == 0) return false;
     CommandMessage message{};
-    if (osMessageQueueGet(commandFifo, &message, nullptr, timeout) != osOK) return {};
+    if (osMessageQueueGet(commandFifo, &message, nullptr, timeout) != osOK) return false;
     activeChannel = message.channel;
     activeRequest = message.request;
     message.text[sizeof(message.text) - 1] = 0;
-    return message.text;
+    strncpy(buffer, message.text, capacity - 1);
+    buffer[capacity - 1] = 0;
+    return true;
+}
+std::string DummyRobot::CommandHandler::Pop(uint32_t timeout)
+{
+    char buffer[sizeof(CommandMessage::text)] = {};
+    return Pop(buffer, sizeof(buffer), timeout) ? std::string(buffer) : std::string();
 }
 uint32_t DummyRobot::CommandHandler::GetSpace() { return osMessageQueueGetSpace(commandFifo); }
 void DummyRobot::CommandHandler::ClearFifo()
@@ -561,9 +571,9 @@ void DummyRobot::CommandHandler::ClearFifo()
     context->scheduledActions = context->scheduledActions >= removed ? context->scheduledActions - removed : 0;
     __set_PRIMASK(mask);
 }
-uint32_t DummyRobot::CommandHandler::ParseCommand(const std::string& command)
+uint32_t DummyRobot::CommandHandler::ParseCommand(const char* command)
 {
-    if (command.empty()) return GetSpace();
+    if (!command || !command[0]) return GetSpace();
     for (;;) {
         uint32_t mask = __get_PRIMASK();
         __disable_irq();
@@ -579,21 +589,21 @@ uint32_t DummyRobot::CommandHandler::ParseCommand(const std::string& command)
     Respond(executionOutput, "Task Executing");
     bool ok = false;
     const char* tag = "Move";
-    if (command == "!START") { tag = "Started"; ok = context->Startup(); }
-    else if (command == "!HOME") { tag = "Home"; ok = context->Homing(); }
-    else if (command == "!RESET") { tag = "Reset"; ok = context->Resting(); }
-    else if (command == "!CLOSE") { tag = "Close"; ok = context->Shutdown(); }
-    else if (command == "!CALIBRATION") { tag = "Calibration"; ok = context->CalibrateHomeOffset(); }
-    else if (command == "!HD_ZERO") { tag = "HD_ZERO"; ok = context->CalibrateHand(); }
-    else if (command == "!HD_EN") { tag = "HD_EN"; ok = context->SetHandEnable(true); }
-    else if (command == "!HD_DIS") { tag = "HD_DIS"; ok = context->SetHandEnable(false); }
-    else if (command.compare(0, 4, "!HD_") == 0) {
-        tag = command.compare(0, 7, "!HD_POS") == 0 ? "HD_POS" : (command == "!HD_O" ? "HD_O" : "HD_C");
-        ok = context->RunHand(command.c_str());
+    if (strcmp(command, "!START") == 0) { tag = "Started"; ok = context->Startup(); }
+    else if (strcmp(command, "!HOME") == 0) { tag = "Home"; ok = context->Homing(); }
+    else if (strcmp(command, "!RESET") == 0) { tag = "Reset"; ok = context->Resting(); }
+    else if (strcmp(command, "!CLOSE") == 0) { tag = "Close"; ok = context->Shutdown(); }
+    else if (strcmp(command, "!CALIBRATION") == 0) { tag = "Calibration"; ok = context->CalibrateHomeOffset(); }
+    else if (strcmp(command, "!HD_ZERO") == 0) { tag = "HD_ZERO"; ok = context->CalibrateHand(); }
+    else if (strcmp(command, "!HD_EN") == 0) { tag = "HD_EN"; ok = context->SetHandEnable(true); }
+    else if (strcmp(command, "!HD_DIS") == 0) { tag = "HD_DIS"; ok = context->SetHandEnable(false); }
+    else if (strncmp(command, "!HD_", 4) == 0) {
+        tag = strncmp(command, "!HD_POS", 7) == 0 ? "HD_POS" : (strcmp(command, "!HD_O") == 0 ? "HD_O" : "HD_C");
+        ok = context->RunHand(command);
     } else {
         float values[6] = {}, speed = context->GetJointSpeed();
         char extra;
-        int count = sscanf(command.c_str() + 1, "%f,%f,%f,%f,%f,%f,%f%c", values, values + 1,
+        int count = sscanf(command + 1, "%f,%f,%f,%f,%f,%f,%f%c", values, values + 1,
                            values + 2, values + 3, values + 4, values + 5, &speed, &extra);
         bool valid = count == 6 || count == 7;
         for (float value : values) if (!std::isfinite(value)) valid = false;
@@ -620,7 +630,7 @@ uint32_t DummyRobot::CommandHandler::ParseCommand(const std::string& command)
     if (pauseAfterAction) context->SetRGBAutoSubState(RGB::AUTO_PAUSED);
     else context->NotifyWorkDone();
     TransactionSink output(Output(activeChannel), activeRequest);
-    if (ok && command == "!HD_ZERO")
+    if (ok && strcmp(command, "!HD_ZERO") == 0)
         Respond(output, "HD_ZERO OK MIN:%.2f MAX:%.2f STATE:%s", context->hand2->ClosedAngle,
                 context->hand2->OpenedAngle, context->StateName());
     else if (ok) Respond(output, "%s OK STATE:%s", tag, context->StateName());
@@ -631,6 +641,10 @@ uint32_t DummyRobot::CommandHandler::ParseCommand(const std::string& command)
                 fault.error, fault.finished, fault.stalled);
     }
     return GetSpace();
+}
+uint32_t DummyRobot::CommandHandler::ParseCommand(const std::string& command)
+{
+    return ParseCommand(command.c_str());
 }
 
 void DummyRobot::SetJointSpeed(float value)

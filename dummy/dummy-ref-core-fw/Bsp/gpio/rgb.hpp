@@ -28,6 +28,8 @@ private:
     uint16_t  flashStep = 0;          // 急停快闪/慢闪独立计步
 public:
     volatile uint8_t data_sentflag = 0;  // DMA 回调与刷新线程共享
+    volatile bool dmaActive = false;     // 防止刷新线程覆盖正在发送的缓冲区
+    volatile uint32_t dmaStartedAt = 0;  // 最近一次 DMA 启动时间
 
     // ────────── 灯光模式编号（持久化到 EEPROM）──────────
     //  0  = 关闭
@@ -124,6 +126,21 @@ public:
     // DMA 启动后阻塞等待 data_sentflag（由 PulseFinished 回调置 1）。
     void WS2812_Send (void)
     {
+        const uint32_t now = HAL_GetTick();
+        if (dmaActive)
+        {
+            // DMA 正常只需不到 1 ms；异常时主动回收，不能让 RGB 线程永久等待。
+            if (now - dmaStartedAt < 10U)
+                return;
+#if defined(TIM_DMA_CC4) && defined(TIM_CCER_CC4E)
+            __HAL_TIM_DISABLE_DMA(&htim2, TIM_DMA_CC4);
+            CLEAR_BIT(htim2.Instance->CCER, TIM_CCER_CC4E);
+            __HAL_TIM_DISABLE(&htim2);
+#endif
+            dmaActive = false;
+            data_sentflag = 0;
+        }
+
         uint32_t indx=0;
         uint32_t color;
         HAL_StatusTypeDef ret;
@@ -157,19 +174,14 @@ public:
         }
 
         data_sentflag = 0;
+        dmaActive = true;
+        dmaStartedAt = now;
         ret = HAL_TIM_PWM_Start_DMA(&htim2, TIM_CHANNEL_4, pwmData, indx);
         if (ret != HAL_OK) {
+            dmaActive = false;
             data_sentflag = 0;
             return;
         }
-        uint32_t started = HAL_GetTick();
-        while (!data_sentflag) {
-            if (HAL_GetTick() - started >= 5) {
-                HAL_TIM_PWM_Stop_DMA(&htim2, TIM_CHANNEL_4);
-                return;
-            }
-        }
-        data_sentflag = 0;
     }
 
     // 彩虹流水：12 个 step 一周期，每颗灯按位置偏移取色相，颜色平滑过渡。

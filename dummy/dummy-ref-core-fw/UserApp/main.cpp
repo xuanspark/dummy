@@ -27,6 +27,8 @@ static volatile bool imuReady = false;
 
 /* Thread Definitions -----------------------------------------------------*/
 osThreadId_t controlLoopFixUpdateHandle;
+static void ReportRuntimeHealth();
+
 void ThreadControlLoopFixUpdate(void* argument)
 {
     for (;;)
@@ -64,9 +66,11 @@ void ThreadControlLoopFixUpdate(void* argument)
 osThreadId_t ControlLoopUpdateHandle;
 void ThreadControlLoopUpdate(void* argument)
 {
+    char command[128];
     for (;;)
     {
-        dummy.commandHandler.ParseCommand(dummy.commandHandler.Pop(osWaitForever));
+        if (dummy.commandHandler.Pop(command, sizeof(command), osWaitForever))
+            dummy.commandHandler.ParseCommand(command);
     }
 }
 
@@ -75,6 +79,7 @@ osThreadId_t oledTaskHandle;
 void ThreadOledUpdate(void* argument)
 {
     uint32_t t = micros();
+    uint32_t healthReportElapsedMs = 0;
     char buf[16];
     char cmdModeNames[4][4] = {"SEQ", "INT", "TRJ", "TUN"};
 
@@ -130,6 +135,12 @@ void ThreadOledUpdate(void* argument)
         }
 
         oled.sendBuffer();
+        healthReportElapsedMs += 50;
+        if (healthReportElapsedMs >= 5000)
+        {
+            healthReportElapsedMs = 0;
+            ReportRuntimeHealth();
+        }
         osDelay(50);
     }
 }
@@ -170,7 +181,6 @@ static void ReportRuntimeHealth()
 }
 
 void ThreadRGBUpdate(void* argument) {
-    uint32_t healthReportElapsedMs = 0;
     for (;;) {
         if (dummy.GetRGBEnabled())
         {
@@ -183,12 +193,6 @@ void ThreadRGBUpdate(void* argument) {
         dummy.AutoModeIdleTick(30);
         // 在线检测定时 tick（5 分钟，工作时不检测）
         dummy.OnlineCheckTick(30);
-        healthReportElapsedMs += 30;
-        if (healthReportElapsedMs >= 5000)
-        {
-            healthReportElapsedMs = 0;
-            ReportRuntimeHealth();
-        }
         osDelay(30);
     }
 }
@@ -197,7 +201,6 @@ void HAL_TIM_PWM_PulseFinishedCallback(TIM_HandleTypeDef *htim)
 {
     if(htim->Instance==TIM2)
     {
-        HAL_TIM_PWM_Stop_DMA(&htim2, TIM_CHANNEL_4);
         rgb.Interrupt(1);
     }
 }
