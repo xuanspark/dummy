@@ -39,22 +39,9 @@ void ThreadControlLoopFixUpdate(void* argument)
             // NORMAL 与 PAUSED 都正常运行控制环：
             //   - NORMAL：常规分发命令；
             //   - PAUSED：让当前未完成的动作自然继续到目标点；新命令在 ParseCommand 入口阻塞。
-            if (dummy.IsMoving()) switch (dummy.commandMode)
-            {
-                case DummyRobot::COMMAND_TARGET_POINT_SEQUENTIAL:
-                case DummyRobot::COMMAND_TARGET_POINT_INTERRUPTABLE:
-                case DummyRobot::COMMAND_CONTINUES_TRAJECTORY:
-                    dummy.MoveJoints(dummy.targetJoints);
-                    dummy.UpdateJointPose6D();
-                    break;
-                case DummyRobot::COMMAND_MOTOR_TUNING:
-                    dummy.MoveJoints(dummy.targetJoints);
-                    dummy.UpdateJointPose6D();
-                    break;
-            }
-            else {
-                dummy.PollJointAngle();
-            }
+            dummy.PollJointAngle();
+            if (dummy.IsMoving())
+                dummy.UpdateJointPose6D();
         } else if (dummy.IsEnabled() && dummy.robotState == DummyRobot::STATE_EMERGENCY_STOP)
         {
             // 急停：每 tick 主动广播 V=0 实现机械制动（幂等）。
@@ -169,7 +156,7 @@ static void ReportRuntimeHealth()
     if (!uart4StreamOutputPtr) return;
     Respond(*uart4StreamOutputPtr,
             "[sys] heap=%lu min_heap=%lu stack_words{comm=%lu usb=%lu uart=%lu "
-            "ctrl=%lu cmd=%lu oled=%lu rgb=%lu}\n",
+            "ctrl=%lu cmd=%lu oled=%lu rgb=%lu usb_rx_drop=%lu}\n",
             (unsigned long) xPortGetFreeHeapSize(),
             (unsigned long) xPortGetMinimumEverFreeHeapSize(),
             (unsigned long) StackWatermark(commTaskHandle),
@@ -178,7 +165,8 @@ static void ReportRuntimeHealth()
             (unsigned long) StackWatermark(controlLoopFixUpdateHandle),
             (unsigned long) StackWatermark(ControlLoopUpdateHandle),
             (unsigned long) StackWatermark(oledTaskHandle),
-            (unsigned long) StackWatermark(rgbTaskHandle));
+            (unsigned long) StackWatermark(rgbTaskHandle),
+            (unsigned long) usb_stats_.rx_drop_cnt);
 }
 
 void ThreadRGBUpdate(void* argument) {

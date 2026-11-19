@@ -106,9 +106,16 @@ BidirectionalPacketBasedChannel usb_channel(usb_packet_output_native);
 
 struct USBInterface
 {
-    uint8_t *rx_buf = nullptr;
-    uint32_t rx_len = 0;
-    bool data_pending = false;
+    static constexpr uint8_t RX_QUEUE_DEPTH = 4;
+    struct Packet {
+        uint8_t data[USB_RX_DATA_SIZE];
+        uint32_t len;
+    };
+    Packet rx_queue[RX_QUEUE_DEPTH];
+    volatile uint8_t rx_head = 0;
+    volatile uint8_t rx_tail = 0;
+    volatile uint8_t rx_count = 0;
+    volatile uint32_t rx_drop_cnt = 0;
     uint8_t out_ep;
     uint8_t in_ep;
     USBSender &usb_sender;
@@ -117,17 +124,11 @@ struct USBInterface
 // 注意：静态对象让这里不够模块化。
 // 注意：使用单一 RX 信号量 + 轮询 data_pending 使单一泵循环线程能处理两个接口。
 static USBInterface CDC_interface = {
-    .rx_buf = nullptr,
-    .rx_len = 0,
-    .data_pending = false,
     .out_ep = CDC_OUT_EP,
     .in_ep = CDC_IN_EP,
     .usb_sender = usb_packet_output_cdc,
 };
 static USBInterface ODrive_interface = {
-    .rx_buf = nullptr,
-    .rx_len = 0,
-    .data_pending = false,
     .out_ep = ODRIVE_OUT_EP,
     .in_ep = ODRIVE_IN_EP,
     .usb_sender = usb_packet_output_native,
@@ -143,31 +144,32 @@ static void UsbServerTask(void *ctx)
         osStatus sem_stat = osSemaphoreAcquire(sem_usb_rx, osWaitForever);
         if (sem_stat == osOK)
         {
-            usb_stats_.rx_cnt++;
-
-            // CDC 接口（ASCII 命令路径）
-            if (CDC_interface.data_pending)
+            for (USBInterface* iface : {&CDC_interface, &ODrive_interface})
             {
-                CDC_interface.data_pending = false;
+                for (;;)
+                {
+                    USBInterface::Packet packet{};
+                    uint32_t mask = __get_PRIMASK();
+                    __disable_irq();
+                    if (iface->rx_count == 0)
+                    {
+                        __set_PRIMASK(mask);
+                        break;
+                    }
+                    const uint8_t slot = iface->rx_tail;
+                    packet.len = iface->rx_queue[slot].len;
+                    std::memcpy(packet.data, iface->rx_queue[slot].data, packet.len);
+                    iface->rx_tail = (slot + 1) % USBInterface::RX_QUEUE_DEPTH;
+                    --iface->rx_count;
+                    __set_PRIMASK(mask);
 
-                // 快照输入数据，随即 USBD_CDC_ReceivePacket 以允许下一包在当前命令还未处理完时到达
-                // （例如 !HOME 造成 Homing() 阻塞期间 !STOP 仍能被接收并被 ISR 偷拍）
-                static uint8_t cdc_snapshot[USB_RX_DATA_SIZE];
-                size_t snap_len = CDC_interface.rx_len;
-                if (snap_len > sizeof(cdc_snapshot)) snap_len = sizeof(cdc_snapshot);
-                std::memcpy(cdc_snapshot, CDC_interface.rx_buf, snap_len);
-
-                USBD_CDC_ReceivePacket(&hUsbDeviceFS, CDC_interface.out_ep);  // 提前释放下一包接收
-
-                ASCII_protocol_parse_stream(cdc_snapshot, snap_len, usb_stream_output);
-            }
-
-            // Native 接口（fibre 二进制路径）
-            if (ODrive_interface.data_pending)
-            {
-                ODrive_interface.data_pending = false;
-                usb_channel.process_packet(ODrive_interface.rx_buf, ODrive_interface.rx_len);
-                USBD_CDC_ReceivePacket(&hUsbDeviceFS, ODrive_interface.out_ep);  // 释放下一包接收
+                    usb_stats_.rx_cnt++;
+                    USBD_CDC_ReceivePacket(&hUsbDeviceFS, iface->out_ep);
+                    if (iface == &CDC_interface)
+                        ASCII_protocol_parse_stream(packet.data, packet.len, usb_stream_output);
+                    else
+                        usb_channel.process_packet(packet.data, packet.len);
+                }
             }
         }
     }
@@ -201,11 +203,22 @@ void usb_rx_process_packet(uint8_t *buf, uint32_t len, uint8_t endpoint_pair)
             dummy.RequestEmergencyStopFromISR();
     }
 
-    // 在上一个包被处理完之前，下一个 USB 包不会进入。
-    // 因此直接写这几个变量是安全的（上个处理已结束）。
-    usb_iface->rx_buf = buf;
-    usb_iface->rx_len = len;
-    usb_iface->data_pending = true;
+    if (len > USB_RX_DATA_SIZE) len = USB_RX_DATA_SIZE;
+    uint32_t mask = __get_PRIMASK();
+    __disable_irq();
+    if (usb_iface->rx_count >= USBInterface::RX_QUEUE_DEPTH)
+    {
+        ++usb_iface->rx_drop_cnt;
+        ++usb_stats_.rx_drop_cnt;
+        __set_PRIMASK(mask);
+        return;
+    }
+    const uint8_t slot = usb_iface->rx_head;
+    std::memcpy(usb_iface->rx_queue[slot].data, buf, len);
+    usb_iface->rx_queue[slot].len = len;
+    usb_iface->rx_head = (slot + 1) % USBInterface::RX_QUEUE_DEPTH;
+    ++usb_iface->rx_count;
+    __set_PRIMASK(mask);
     osSemaphoreRelease(sem_usb_rx);
 }
 

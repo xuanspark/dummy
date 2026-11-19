@@ -366,10 +366,10 @@ bool DummyRobot::MoveL(float x, float y, float z, float a, float b, float c)
 void DummyRobot::MoveJoints(DOF6Kinematic::Joint6D_t pose)
 {
     if (!IsEnabled() || !armMotionActive || robotState == STATE_EMERGENCY_STOP) return;
-    for (int n = 1; n <= 6; ++n) {
-        if (robotState == STATE_EMERGENCY_STOP) return;
-        motorJ[n]->SetAngleWithVelocityLimit(pose.a[n - 1] - initPose.a[n - 1], dynamicJointSpeeds.a[n - 1]);
-    }
+    const uint8_t node = motionSendNode;
+    if (robotState == STATE_EMERGENCY_STOP) return;
+    motorJ[node]->SetAngleWithVelocityLimit(pose.a[node - 1] - initPose.a[node - 1], dynamicJointSpeeds.a[node - 1]);
+    motionSendNode = node == 6 ? 1 : node + 1;
 }
 bool DummyRobot::TryMotionFault(const char* reason, uint8_t node, float error, uint32_t epoch)
 {
@@ -442,7 +442,10 @@ bool DummyRobot::RunPose(const DOF6Kinematic::Joint6D_t& pose, float speed)
             jointSpeed = previousSpeed;
             return true;
         }
-        if ((!IsEnabled() || activeTime >= 120000) &&
+        const bool feedbackTimeout = activeTime >= 500 &&
+            (motorJ[failedNode]->angleSequence == sequences[failedNode - 1] ||
+             HAL_GetTick() - motorJ[failedNode]->lastAngleTick > 500);
+        if ((!IsEnabled() || activeTime >= 60000 || feedbackTimeout) &&
             TryMotionFault(IsEnabled() ? failure : "arm_disabled", failedNode,
                            activePose.a[failedNode - 1] - currentJoints.a[failedNode - 1], seenStop)) break;
         osDelay(10);

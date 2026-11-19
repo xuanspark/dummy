@@ -274,9 +274,9 @@ bool CanSendMessage(CAN_context* canCtx, uint8_t* txData, CAN_TxHeaderTypeDef* t
     // 安静放弃本次发送，让上层重试或被 dceQueryDone=false 反映为离线。
     osStatus semaphore_status;
     if (canCtx->handle->Instance == CAN1)
-        semaphore_status = osSemaphoreAcquire(sem_can1_tx, 100);
+        semaphore_status = osSemaphoreAcquire(sem_can1_tx, 2);
     else if (canCtx->handle->Instance == CAN2)
-        semaphore_status = osSemaphoreAcquire(sem_can2_tx, 100);
+        semaphore_status = osSemaphoreAcquire(sem_can2_tx, 2);
     else
         return false;
 

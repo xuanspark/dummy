@@ -29,6 +29,7 @@ typedef struct
 {
     uint32_t rx_cnt;            // 总接收字节计数
     uint32_t tx_cnt;            // 总发送字节计数
+    uint32_t rx_drop_cnt;       // RX 缓冲区满时丢弃的数据包数
     uint32_t tx_overrun_cnt;    // TX 超时放弃计数（本轮修复后不会再在超时后强发）
 } USBStats_t;
 

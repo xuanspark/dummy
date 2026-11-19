@@ -409,6 +409,7 @@ public:
 private:
     CAN_HandleTypeDef* hcan;
     uint8_t feedbackNode = 1;
+    uint8_t motionSendNode = 1;
     float jointSpeed = DEFAULT_JOINT_SPEED;
     float jointSpeedRatio = 1;
 //    DOF6Kinematic::Joint6D_t dynamicJointSpeeds = {1, 1, 1, 1, 1, 1};

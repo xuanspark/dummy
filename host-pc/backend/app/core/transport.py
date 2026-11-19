@@ -9,7 +9,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
-import time
 from abc import ABC, abstractmethod
 from typing import Optional
 
@@ -132,7 +131,11 @@ class Transport(ABC):
             except Exception as exc:  # noqa: BLE001
                 log.error("reader error: %s", exc)
                 self._connected = False
-                time.sleep(0.5)
+                try:
+                    self._close()
+                except Exception:  # noqa: BLE001
+                    pass
+                break
 
 
 class SerialTransport(Transport):

@@ -78,7 +78,17 @@ class ConnectionManager:
     async def connect(self, port: str, baud: int) -> None:
         async with self._lock:
             if self._robot is not None:
-                raise RuntimeError("already connected; disconnect first")
+                if self.is_connected:
+                    raise RuntimeError("already connected; disconnect first")
+                # 串口读线程异常退出后回收旧对象，避免新的 COM 连接被旧实例卡住。
+                stale = self._robot
+                self._robot = None
+                self._port = None
+                self._baud = None
+                try:
+                    await stale.stop()
+                except Exception:  # noqa: BLE001
+                    log.warning("failed to clean stale transport", exc_info=True)
             transport = SerialTransport(port, baud)
             robot = Robot(transport, default_timeout=self._default_timeout, correlated=True)
             try:
