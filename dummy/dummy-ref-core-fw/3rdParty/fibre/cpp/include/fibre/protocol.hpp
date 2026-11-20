@@ -16,6 +16,7 @@ see protocol.md for the protocol specification
 #include <string.h>
 #include "crc.hpp"
 #include "cpp_utils.hpp"
+#include "fixed_format.hpp"
 
 // Note that this option cannot be used to debug UART because it prints on UART
 //#define DEBUG_FIBRE
@@ -684,8 +685,7 @@ static bool to_string(const T &value, char *buffer, size_t length, int)
 template<typename T = float>
 static bool to_string(const float &value, char *buffer, size_t length, int)
 {
-    snprintf(buffer, length, "%f", (double) value);
-    return true;
+    return FormatFixed(buffer, length, value, 6);
 }
 
 template<typename T = bool>

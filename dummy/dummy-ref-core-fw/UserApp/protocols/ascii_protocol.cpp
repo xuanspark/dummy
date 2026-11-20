@@ -1,6 +1,7 @@
 #include "common_inc.h"
 #include "runtime_failure.hpp"
 #include "ascii_processor.hpp"
+#include "fixed_format.hpp"
 #include <cctype>
 #include <cmath>
 #include <cstring>
@@ -287,8 +288,10 @@ void Execute(const Message& message)
     if (query) {
         if (!strcmp(command, "#GETCMDMODE")) {
             if (count != 1) { Respond(output, "GetCmdMode Error: bad_args"); return; }
-            Respond(output, "GetCmdMode OK MODE:%u NAME:%s RATIO:%.2f STATE:%s", dummy.commandMode,
-                dummy.ModeName(), dummy.SpeedRatio(), dummy.StateName());
+            char ratio[24];
+            FormatFixed(ratio, sizeof(ratio), dummy.SpeedRatio(), 2);
+            Respond(output, "GetCmdMode OK MODE:%u NAME:%s RATIO:%s STATE:%s", dummy.commandMode,
+                dummy.ModeName(), ratio, dummy.StateName());
         } else if (!strcmp(command, "#GETLIMIT")) {
             bool all = count == 1 || (count == 2 && (!strcmp(arguments[1], "all") || !strcmp(arguments[1], "ALL")));
             int parameter = count == 3 ? LimitParameter(arguments[2]) : -1;
@@ -303,8 +306,13 @@ void Execute(const Message& message)
                 auto* motor = dummy.motorJ[n];
                 for (int p = 0; p < 3; ++p) if (parameter < 0 || parameter == p) {
                     if (motor && (motor->limitReceivedMask & (1u << p)))
-                        Respond(output, "LIMIT NODE:%lu %s:%.6f APPLIED:%.6f", n, limitNames[p],
-                            motor->limits[p], motor->appliedLimits[p]);
+                    {
+                        char limit[32];
+                        char applied[32];
+                        FormatFixed(limit, sizeof(limit), motor->limits[p], 6);
+                        FormatFixed(applied, sizeof(applied), motor->appliedLimits[p], 6);
+                        Respond(output, "LIMIT NODE:%lu %s:%s APPLIED:%s", n, limitNames[p], limit, applied);
+                    }
                     else { complete = false; Respond(output, "LIMIT NODE:%lu %s:NL", n, limitNames[p]); }
                 }
             }
@@ -314,16 +322,20 @@ void Execute(const Message& message)
             Respond(output, "Status OK STATE:%s CAN_RX:%lu CAN_DROP:%lu", dummy.StateName(), dummy.canRxTotal, dummy.canDroppedFrames);
             Respond(output, "FW:%s BUILD:%s %s", CONFIG_FW_VERSION_TEXT, __DATE__, __TIME__);
             const auto fault = dummy.motionFault;
-            Respond(output, "FAULT:%s NODE:%lu AGE_MS:%lu ERROR_DEG:%.2f FINISHED:%lu STALLED:%lu",
-                    fault.reason, fault.node, fault.feedbackAge, fault.error, fault.finished, fault.stalled);
+            char faultError[24];
+            FormatFixed(faultError, sizeof(faultError), fault.error, 2);
+            Respond(output, "FAULT:%s NODE:%lu AGE_MS:%lu ERROR_DEG:%s FINISHED:%lu STALLED:%lu",
+                    fault.reason, fault.node, fault.feedbackAge, faultError, fault.finished, fault.stalled);
             Respond(output, "ENABLED:%u HOMED:%u ACTIVE:%u QUEUE:%lu", dummy.IsEnabled(), dummy.IsHomed(), dummy.TaskActive(), 16 - dummy.commandHandler.GetSpace());
             for (int n = 1; n <= 7; ++n) {
                 auto* motor = dummy.motorJ[n];
                 const uint32_t received = motor->lastResponseTick;
                 const uint32_t age = HAL_GetTick() - received;
-                Respond(output, "%s[%d] %s age=%lums angle=%.2f finished=%u stalled=%u", n == 7 ? "HD" : "J", n,
+                char angle[24];
+                FormatFixed(angle, sizeof(angle), motor->angle, 2);
+                Respond(output, "%s[%d] %s age=%lums angle=%s finished=%u stalled=%u", n == 7 ? "HD" : "J", n,
                     motor->isOnline ? "OL" : "NL", motor->isOnline ? static_cast<unsigned long>(age) : 0xfffffffful,
-                    motor->angle, motor->state == CtrlStepMotor::FINISH, motor->isStalled);
+                    angle, motor->state == CtrlStepMotor::FINISH, motor->isStalled);
             }
             Respond(output, "Status End");
         } else if (!strcmp(command, "#GETJPOS") || !strcmp(command, "#GETLPOS")) {
@@ -332,14 +344,23 @@ void Execute(const Message& message)
             osDelay(10);
             if (!strcmp(command, "#GETJPOS")) {
                 auto& j = dummy.currentJoints;
-                Respond(output, "GetJPos OK %.2f %.2f %.2f %.2f %.2f %.2f H:%d", j.a[0], j.a[1], j.a[2], j.a[3], j.a[4], j.a[5], dummy.hand2->GetState());
+                char value[6][24];
+                for (int i = 0; i < 6; ++i) FormatFixed(value[i], sizeof(value[i]), j.a[i], 2);
+                Respond(output, "GetJPos OK %s %s %s %s %s %s H:%d", value[0], value[1], value[2],
+                        value[3], value[4], value[5], dummy.hand2->GetState());
             } else {
                 dummy.UpdateJointPose6D();
                 auto& p = dummy.currentPose6D;
-                Respond(output, "GetLPos OK %.2f %.2f %.2f %.2f %.2f %.2f H:%d", p.X, p.Y, p.Z, p.A, p.B, p.C, dummy.hand2->GetState());
+                char value[6][24];
+                const float pose[6] = {p.X, p.Y, p.Z, p.A, p.B, p.C};
+                for (int i = 0; i < 6; ++i) FormatFixed(value[i], sizeof(value[i]), pose[i], 2);
+                Respond(output, "GetLPos OK %s %s %s %s %s %s H:%d", value[0], value[1], value[2],
+                        value[3], value[4], value[5], dummy.hand2->GetState());
             }
         } else if (!strcmp(command, "#GETSPEED")) {
-            Respond(output, "GetSpeed OK SPEED:%.2f", dummy.GetJointSpeed());
+            char speed[24];
+            FormatFixed(speed, sizeof(speed), dummy.GetJointSpeed(), 2);
+            Respond(output, "GetSpeed OK SPEED:%s", speed);
         } else if (!strcmp(command, "#ONLINE")) {
             if (count == 1) {
                 bool online = dummy.CheckAllNodesOnline();
@@ -410,7 +431,9 @@ void Execute(const Message& message)
             if (!ReadLimit(dummy.hand2, 2)) { Respond(output, "HD_I Error: read_failed"); return; }
             if (dummy.robotState != DummyRobot::STATE_NORMAL) { Respond(output, "HD_I Error: state=%s", dummy.StateName()); return; }
             dummy.hand2->current = fminf(current, dummy.hand2->limits[2]);
-            Respond(output, "HD_I OK current=%.3f", dummy.hand2->current); return;
+            char currentText[24];
+            FormatFixed(currentText, sizeof(currentText), dummy.hand2->current, 3);
+            Respond(output, "HD_I OK current=%s", currentText); return;
         }
     }
     const bool setLimit = !strcmp(command, "#SETLIMIT");

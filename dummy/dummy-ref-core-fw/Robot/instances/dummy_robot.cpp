@@ -1,6 +1,7 @@
 #include "communication.hpp"
 #include "dummy_robot.h"
 #include "eeprom_interface.h"
+#include "fixed_format.hpp"
 #include <cmath>
 #include <cstring>
 
@@ -630,15 +631,21 @@ uint32_t DummyRobot::CommandHandler::ParseCommand(const char* command)
     if (pauseAfterAction) context->SetRGBAutoSubState(RGB::AUTO_PAUSED);
     else context->NotifyWorkDone();
     TransactionSink output(Output(activeChannel), activeRequest);
-    if (ok && strcmp(command, "!HD_ZERO") == 0)
-        Respond(output, "HD_ZERO OK MIN:%.2f MAX:%.2f STATE:%s", context->hand2->ClosedAngle,
-                context->hand2->OpenedAngle, context->StateName());
+    if (ok && strcmp(command, "!HD_ZERO") == 0) {
+        char closed[24];
+        char opened[24];
+        FormatFixed(closed, sizeof(closed), context->hand2->ClosedAngle, 2);
+        FormatFixed(opened, sizeof(opened), context->hand2->OpenedAngle, 2);
+        Respond(output, "HD_ZERO OK MIN:%s MAX:%s STATE:%s", closed, opened, context->StateName());
+    }
     else if (ok) Respond(output, "%s OK STATE:%s", tag, context->StateName());
     else {
         const auto& fault = context->motionFault;
-        Respond(output, "%s Error: task_failed state=%s reason=%s node=%lu age_ms=%lu error_deg=%.2f finished=%lu stalled=%lu",
+        char faultError[24];
+        FormatFixed(faultError, sizeof(faultError), fault.error, 2);
+        Respond(output, "%s Error: task_failed state=%s reason=%s node=%lu age_ms=%lu error_deg=%s finished=%lu stalled=%lu",
                 tag, context->StateName(), fault.reason, fault.node, fault.feedbackAge,
-                fault.error, fault.finished, fault.stalled);
+                faultError, fault.finished, fault.stalled);
     }
     return GetSpace();
 }
