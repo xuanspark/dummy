@@ -9,8 +9,8 @@
 #include "common_inc.h"
 
 
-// REF OLED 使用已初始化的硬件 I2C2（PB10/PB11），避免软件 I2C 时序受任务调度影响。
-SSD1306 oled(&hi2c2);
+// REF OLED 使用已验证的 PB10/PB11 软件 I2C，避免硬件 I2C2 与实际板级连接不一致。
+SSD1306 oled(&hi2c0);
 // On-board Sensor, used hi2c1
 MPU6050 mpu6050(&hi2c1);
 // 5 User-Timers, can choose from htim7/htim10/htim11/htim13/htim14
