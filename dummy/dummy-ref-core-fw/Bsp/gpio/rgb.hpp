@@ -5,6 +5,9 @@
 #include <tim.h>
 #include <math.h>
 
+extern DMA_HandleTypeDef hdma_rgb_tim5;
+extern "C" void RGB_DMA_IRQHandler(void);
+
 #define MAX_LED 12               // 板载 WS2812 灯珠数量（REF 1.0 板）
 #define USE_BRIGHTNESS 0         // 是否启用 Set_Brightness 亮度衰减（默认关闭，节省 CPU）
 #define PI               3.14159265358979f
@@ -77,6 +80,8 @@ public:
 
     // 构造函数：mode 参数预留，目前未使用（实际模式由 dummy.GetRGBMode() 决定）
     RGB(uint8_t mode=0);
+
+    void InitHardware(void);
 
     // 主入口：按 _mode 分发到具体灯效。由 ThreadRGBUpdate 每 30 ms 调用
     void Run(Rgb_style_t _mode = MODE_RAINBOW);
@@ -188,6 +193,41 @@ public:
     }
 
     // 旧 DMA 实现保留作历史参考，不参与当前构建。
+    void WS2812_SendDma(void)
+    {
+        static bool dmaActive = false;
+        uint32_t index = 0;
+        if (dmaActive)
+            return;
+        for (uint16_t led = 0; led < MAX_LED; ++led)
+        {
+#if USE_BRIGHTNESS
+            const uint32_t color = (LED_Mod[led][1] << 16) | (LED_Mod[led][2] << 8) | LED_Mod[led][3];
+#else
+            const uint32_t color = (LED_Data[led][1] << 16) | (LED_Data[led][2] << 8) | LED_Data[led][3];
+#endif
+            for (int bit = 23; bit >= 0; --bit)
+                pwmData[index++] = (color & (1UL << bit)) ? 140U : 70U;
+        }
+        for (uint32_t i = 0; i < 50U; ++i)
+            pwmData[index++] = 0U;
+        data_sentflag = 0;
+        dmaActive = true;
+        if (HAL_TIM_PWM_Start_DMA(&htim5, TIM_CHANNEL_4, pwmData, index) != HAL_OK)
+        {
+            dmaActive = false;
+            return;
+        }
+        const uint32_t started = HAL_GetTick();
+        while (!data_sentflag && (HAL_GetTick() - started) < 10U) {}
+        if (!data_sentflag)
+        {
+            HAL_TIM_PWM_Stop_DMA(&htim5, TIM_CHANNEL_4);
+            dmaActive = false;
+        }
+        data_sentflag = 0;
+    }
+
 #if 0
     void WS2812_Send (void)
     {
@@ -254,7 +294,7 @@ public:
 #endif
 
     // 后续灯效统一使用独立的软件时序发送。
-#define WS2812_Send WS2812_SendSoftware
+#define WS2812_Send WS2812_SendDma
 
     void RainBow()
     {

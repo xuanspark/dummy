@@ -156,6 +156,15 @@ void OnTimer7Callback()
     portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
 }
 
+extern "C" void HAL_TIM_PWM_PulseFinishedCallback(TIM_HandleTypeDef *htim)
+{
+    if (htim->Instance == TIM5)
+    {
+        HAL_TIM_PWM_Stop_DMA(&htim5, TIM_CHANNEL_4);
+        rgb.Interrupt(1);
+    }
+}
+
 osThreadId_t rgbTaskHandle;
 static UBaseType_t StackWatermark(osThreadId_t handle)
 {
@@ -227,6 +236,7 @@ void Main(void)
 
     // Init OLED 128x80.
     oled.Init();
+    rgb.InitHardware();
     // PA3 专用于 WS2812 数据，不能启动 TIM9_CH2；只启动实际使用的 CH_A1。
     pwm.Start(PWM::CH_A1);
 

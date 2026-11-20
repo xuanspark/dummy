@@ -8,6 +8,29 @@ RGB::RGB(uint8_t m) {
     // 预留初始化点（当前不需要构造期硬件初始化）
 }
 
+DMA_HandleTypeDef hdma_rgb_tim5;
+
+void RGB::InitHardware(void)
+{
+    hdma_rgb_tim5.Instance = DMA1_Stream3;
+    hdma_rgb_tim5.Init.Channel = DMA_CHANNEL_6;
+    hdma_rgb_tim5.Init.Direction = DMA_MEMORY_TO_PERIPH;
+    hdma_rgb_tim5.Init.PeriphInc = DMA_PINC_DISABLE;
+    hdma_rgb_tim5.Init.MemInc = DMA_MINC_ENABLE;
+    hdma_rgb_tim5.Init.PeriphDataAlignment = DMA_PDATAALIGN_WORD;
+    hdma_rgb_tim5.Init.MemDataAlignment = DMA_MDATAALIGN_WORD;
+    hdma_rgb_tim5.Init.Mode = DMA_NORMAL;
+    hdma_rgb_tim5.Init.Priority = DMA_PRIORITY_HIGH;
+    hdma_rgb_tim5.Init.FIFOMode = DMA_FIFOMODE_DISABLE;
+    if (HAL_DMA_Init(&hdma_rgb_tim5) != HAL_OK) Error_Handler();
+    __HAL_LINKDMA(&htim5, hdma[TIM_DMA_ID_CC4], hdma_rgb_tim5);
+}
+
+extern "C" void RGB_DMA_IRQHandler(void)
+{
+    HAL_DMA_IRQHandler(&hdma_rgb_tim5);
+}
+
 // ---------------------------------------------------------------------------
 // Run —— 主调度入口。由 ThreadRGBUpdate 每 30 ms 调用一次。
 // 根据 mode（来自 dummy.GetRGBMode()）分发到对应灯效函数：
