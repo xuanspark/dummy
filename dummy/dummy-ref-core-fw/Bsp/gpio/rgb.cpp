@@ -26,7 +26,7 @@ static void RGB_DMA_Error(DMA_HandleTypeDef *)
 
 void RGB::InitHardware(void)
 {
-    hdma_rgb_tim5.Instance = DMA1_Stream6;
+    hdma_rgb_tim5.Instance = DMA1_Stream3;
     hdma_rgb_tim5.Init.Channel = DMA_CHANNEL_6;
     hdma_rgb_tim5.Init.Direction = DMA_MEMORY_TO_PERIPH;
     hdma_rgb_tim5.Init.PeriphInc = DMA_PINC_DISABLE;
@@ -40,8 +40,7 @@ void RGB::InitHardware(void)
     hdma_rgb_tim5.Parent = &htim5;
     hdma_rgb_tim5.XferCpltCallback = RGB_DMA_Complete;
     hdma_rgb_tim5.XferErrorCallback = RGB_DMA_Error;
-    __HAL_LINKDMA(&htim5, hdma[TIM_DMA_ID_UPDATE], hdma_rgb_tim5);
-    __HAL_TIM_ENABLE_OCxPRELOAD(&htim5, TIM_CHANNEL_4);
+    __HAL_LINKDMA(&htim5, hdma[TIM_DMA_ID_CC4], hdma_rgb_tim5);
 }
 
 extern "C" void RGB_DMA_IRQHandler(void)

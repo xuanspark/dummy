@@ -219,33 +219,16 @@ public:
             pwmData[index++] = resetCompare;
         data_sentflag = 0;
         dmaActive = true;
-        // 预装第一位，后续数据在每个更新事件写入 CCR4 预装载寄存器。
-        htim5.Instance->CNT = 0U;
-        htim5.Instance->CCR4 = pwmData[0];
-        htim5.Instance->EGR = TIM_EGR_UG;
-        __DMB();
-        if (HAL_DMA_Start_IT(&hdma_rgb_tim5,
-                             reinterpret_cast<uint32_t>(pwmData + 1),
-                             reinterpret_cast<uint32_t>(&htim5.Instance->CCR4),
-                             static_cast<uint16_t>(index - 1U)) != HAL_OK)
+        // 由 HAL 负责启动 TIM5_CH4 DMA，并在传输完成后停止 PWM。
+        if (HAL_TIM_PWM_Start_DMA(&htim5, TIM_CHANNEL_4, pwmData,
+                                  static_cast<uint16_t>(index)) != HAL_OK)
         {
-            dmaActive = false;
-            return;
-        }
-        __HAL_TIM_ENABLE_DMA(&htim5, TIM_DMA_UPDATE);
-        if (HAL_TIM_PWM_Start(&htim5, TIM_CHANNEL_4) != HAL_OK)
-        {
-            __HAL_TIM_DISABLE_DMA(&htim5, TIM_DMA_UPDATE);
-            (void)HAL_DMA_Abort(&hdma_rgb_tim5);
             dmaActive = false;
             return;
         }
         const uint32_t started = HAL_GetTick();
         while (!data_sentflag && (HAL_GetTick() - started) < 10U) {}
-        __HAL_TIM_DISABLE_DMA(&htim5, TIM_DMA_UPDATE);
-        (void)HAL_TIM_PWM_Stop(&htim5, TIM_CHANNEL_4);
-        (void)HAL_DMA_Abort(&hdma_rgb_tim5);
-        htim5.Instance->CCR4 = 0U;
+        HAL_TIM_PWM_Stop_DMA(&htim5, TIM_CHANNEL_4);
         data_sentflag = 0;
         dmaActive = false;
 #else
