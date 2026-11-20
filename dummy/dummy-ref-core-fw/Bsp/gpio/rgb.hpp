@@ -208,7 +208,7 @@ public:
             const uint32_t color = (LED_Data[led][1] << 16) | (LED_Data[led][2] << 8) | LED_Data[led][3];
 #endif
             for (int bit = 23; bit >= 0; --bit)
-                pwmData[index++] = (color & (1UL << bit)) ? 70U : 35U;
+                pwmData[index++] = (color & (1UL << bit)) ? 59U : 30U;
         }
         // DMA 通过 CC4 事件推进，复位段不能使用 0，否则不会产生后续 DMA 请求。
         // 使用很短的低电平脉冲并延长复位窗口，兼顾 DMA 推进和 WS2812 复位要求。
@@ -216,8 +216,11 @@ public:
             pwmData[index++] = resetCompare;
         data_sentflag = 0;
         dmaActive = true;
+        // 预装第一位并从第二位开始 DMA，避免上一帧的 CCR4 复位值污染当前帧首位。
+        htim5.Instance->CNT = 0U;
+        htim5.Instance->CCR4 = pwmData[0];
         __DMB();
-        if (HAL_TIM_PWM_Start_DMA(&htim5, TIM_CHANNEL_4, pwmData, index) != HAL_OK)
+        if (HAL_TIM_PWM_Start_DMA(&htim5, TIM_CHANNEL_4, pwmData + 1, static_cast<uint16_t>(index - 1U)) != HAL_OK)
         {
             dmaActive = false;
             return;
