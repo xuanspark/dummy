@@ -208,11 +208,6 @@ void DMA1_Stream2_IRQHandler(void)
   /* USER CODE END DMA1_Stream2_IRQn 1 */
 }
 
-void DMA1_Stream3_IRQHandler(void)
-{
-  RGB_DMA_IRQHandler();
-}
-
 /**
   * @brief This function handles DMA1 stream4 global interrupt.
   */
@@ -225,6 +220,11 @@ void DMA1_Stream4_IRQHandler(void)
   /* USER CODE BEGIN DMA1_Stream4_IRQn 1 */
 
   /* USER CODE END DMA1_Stream4_IRQn 1 */
+}
+
+void DMA1_Stream6_IRQHandler(void)
+{
+  RGB_DMA_IRQHandler();
 }
 
 /**

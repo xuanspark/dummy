@@ -26,7 +26,7 @@ static void RGB_DMA_Error(DMA_HandleTypeDef *)
 
 void RGB::InitHardware(void)
 {
-    hdma_rgb_tim5.Instance = DMA1_Stream3;
+    hdma_rgb_tim5.Instance = DMA1_Stream6;
     hdma_rgb_tim5.Init.Channel = DMA_CHANNEL_6;
     hdma_rgb_tim5.Init.Direction = DMA_MEMORY_TO_PERIPH;
     hdma_rgb_tim5.Init.PeriphInc = DMA_PINC_DISABLE;
