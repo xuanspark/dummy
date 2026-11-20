@@ -40,7 +40,8 @@ void RGB::InitHardware(void)
     hdma_rgb_tim5.Parent = &htim5;
     hdma_rgb_tim5.XferCpltCallback = RGB_DMA_Complete;
     hdma_rgb_tim5.XferErrorCallback = RGB_DMA_Error;
-    __HAL_LINKDMA(&htim5, hdma[TIM_DMA_ID_CC4], hdma_rgb_tim5);
+    __HAL_LINKDMA(&htim5, hdma[TIM_DMA_ID_UPDATE], hdma_rgb_tim5);
+    __HAL_TIM_ENABLE_OCxPRELOAD(&htim5, TIM_CHANNEL_4);
 }
 
 extern "C" void RGB_DMA_IRQHandler(void)
