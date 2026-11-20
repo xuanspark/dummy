@@ -5,8 +5,10 @@
 #include <tim.h>
 #include <math.h>
 
-extern DMA_HandleTypeDef hdma_rgb_tim5;
 extern "C" void RGB_DMA_IRQHandler(void);
+#if defined(STM32F4xx)
+extern DMA_HandleTypeDef hdma_rgb_tim5;
+#endif
 
 #define MAX_LED 12               // 板载 WS2812 灯珠数量（REF 1.0 板）
 #define USE_BRIGHTNESS 0         // 是否启用 Set_Brightness 亮度衰减（默认关闭，节省 CPU）
@@ -192,9 +194,10 @@ public:
 #endif
     }
 
-    // 通过 TIM5_CH4 DMA 发送 WS2812 数据，避免占用 TIM2 编码器。
+    // 通过 TIM5 更新事件 DMA 发送 WS2812 数据，避免比较值变化产生额外 DMA 事件。
     void WS2812_SendDma(void)
     {
+#if defined(STM32F4xx)
         constexpr uint32_t resetCycles = 80U;
         constexpr uint32_t resetCompare = 2U;
         uint32_t index = 0;
@@ -216,29 +219,38 @@ public:
             pwmData[index++] = resetCompare;
         data_sentflag = 0;
         dmaActive = true;
-        // 预装第一位并从第二位开始 DMA，避免上一帧的 CCR4 复位值污染当前帧首位。
+        // 预装第一位，后续数据在每个更新事件写入 CCR4 预装载寄存器。
         htim5.Instance->CNT = 0U;
         htim5.Instance->CCR4 = pwmData[0];
+        htim5.Instance->EGR = TIM_EGR_UG;
         __DMB();
-        if (HAL_TIM_PWM_Start_DMA(&htim5, TIM_CHANNEL_4, pwmData + 1, static_cast<uint16_t>(index - 1U)) != HAL_OK)
+        if (HAL_DMA_Start_IT(&hdma_rgb_tim5,
+                             reinterpret_cast<uint32_t>(pwmData + 1),
+                             reinterpret_cast<uint32_t>(&htim5.Instance->CCR4),
+                             static_cast<uint16_t>(index - 1U)) != HAL_OK)
         {
+            dmaActive = false;
+            return;
+        }
+        __HAL_TIM_ENABLE_DMA(&htim5, TIM_DMA_UPDATE);
+        if (HAL_TIM_PWM_Start(&htim5, TIM_CHANNEL_4) != HAL_OK)
+        {
+            __HAL_TIM_DISABLE_DMA(&htim5, TIM_DMA_UPDATE);
+            (void)HAL_DMA_Abort(&hdma_rgb_tim5);
             dmaActive = false;
             return;
         }
         const uint32_t started = HAL_GetTick();
         while (!data_sentflag && (HAL_GetTick() - started) < 10U) {}
-        if (data_sentflag)
-        {
-            // 不在 DMA 中断里停止 DMA，避免中断上下文中 Abort 当前 DMA 流。
-            HAL_TIM_PWM_Stop_DMA(&htim5, TIM_CHANNEL_4);
-            data_sentflag = 0;
-            dmaActive = false;
-        }
-        else
-        {
-            HAL_TIM_PWM_Stop_DMA(&htim5, TIM_CHANNEL_4);
-            dmaActive = false;
-        }
+        __HAL_TIM_DISABLE_DMA(&htim5, TIM_DMA_UPDATE);
+        (void)HAL_TIM_PWM_Stop(&htim5, TIM_CHANNEL_4);
+        (void)HAL_DMA_Abort(&hdma_rgb_tim5);
+        htim5.Instance->CCR4 = 0U;
+        data_sentflag = 0;
+        dmaActive = false;
+#else
+        data_sentflag = 1;
+#endif
     }
 
 #if 0

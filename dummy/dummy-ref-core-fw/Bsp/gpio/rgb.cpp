@@ -8,11 +8,25 @@ RGB::RGB(uint8_t m) {
     // 预留初始化点（当前不需要构造期硬件初始化）
 }
 
+#if defined(STM32F4xx)
+
 DMA_HandleTypeDef hdma_rgb_tim5;
+
+extern RGB rgb;
+
+static void RGB_DMA_Complete(DMA_HandleTypeDef *)
+{
+    rgb.Interrupt(1);
+}
+
+static void RGB_DMA_Error(DMA_HandleTypeDef *)
+{
+    rgb.Interrupt(2);
+}
 
 void RGB::InitHardware(void)
 {
-    hdma_rgb_tim5.Instance = DMA1_Stream3;
+    hdma_rgb_tim5.Instance = DMA1_Stream6;
     hdma_rgb_tim5.Init.Channel = DMA_CHANNEL_6;
     hdma_rgb_tim5.Init.Direction = DMA_MEMORY_TO_PERIPH;
     hdma_rgb_tim5.Init.PeriphInc = DMA_PINC_DISABLE;
@@ -23,13 +37,29 @@ void RGB::InitHardware(void)
     hdma_rgb_tim5.Init.Priority = DMA_PRIORITY_HIGH;
     hdma_rgb_tim5.Init.FIFOMode = DMA_FIFOMODE_DISABLE;
     if (HAL_DMA_Init(&hdma_rgb_tim5) != HAL_OK) Error_Handler();
-    __HAL_LINKDMA(&htim5, hdma[TIM_DMA_ID_CC4], hdma_rgb_tim5);
+    hdma_rgb_tim5.Parent = &htim5;
+    hdma_rgb_tim5.XferCpltCallback = RGB_DMA_Complete;
+    hdma_rgb_tim5.XferErrorCallback = RGB_DMA_Error;
+    __HAL_LINKDMA(&htim5, hdma[TIM_DMA_ID_UPDATE], hdma_rgb_tim5);
+    __HAL_TIM_ENABLE_OCxPRELOAD(&htim5, TIM_CHANNEL_4);
 }
 
 extern "C" void RGB_DMA_IRQHandler(void)
 {
     HAL_DMA_IRQHandler(&hdma_rgb_tim5);
 }
+
+#else
+
+void RGB::InitHardware(void)
+{
+}
+
+extern "C" void RGB_DMA_IRQHandler(void)
+{
+}
+
+#endif
 
 // ---------------------------------------------------------------------------
 // Run —— 主调度入口。由 ThreadRGBUpdate 每 30 ms 调用一次。

@@ -227,6 +227,11 @@ void DMA1_Stream4_IRQHandler(void)
   /* USER CODE END DMA1_Stream4_IRQn 1 */
 }
 
+void DMA1_Stream6_IRQHandler(void)
+{
+  RGB_DMA_IRQHandler();
+}
+
 /**
   * @brief This function handles ADC1, ADC2 and ADC3 global interrupts.
   */
