@@ -15,7 +15,7 @@ extern "C" void RGB_DMA_IRQHandler(void);
 // ==========================================================================
 //  RGB —— WS2812 串行 LED 灯效控制器
 // --------------------------------------------------------------------------
-//  - 通过 TIM2_CH4 + DMA 输出符合 WS2812 时序的 PWM 波形（pwmData[]）
+//  - 通过 TIM5_CH4 + DMA 输出符合 WS2812 时序的 PWM 波形（pwmData[]）
 //  - 提供 12 种用户可见模式 + 5 种 auto 子状态（参见 Rgb_style_t）
 //  - 由 ThreadRGBUpdate (main.cpp) 每 30 ms 调用一次 Run()
 //  - 灯效切换时应调 ResetEffectSteps() 复位计步器以避免相位残留
@@ -129,7 +129,7 @@ public:
     // WS2812 协议：每 bit 由一段 PWM 高电平时长决定（0:1/3 周期，1:2/3 周期），
     // 末尾 50 µs 低电平作为 reset 间隙。这里 PWM 周期 = 105 计数（70 = 2/3，30 = 1/3）。
     // DMA 启动后阻塞等待 data_sentflag（由 PulseFinished 回调置 1）。
-    // 使用 PA3 直接发送 WS2812 时序，避免占用 TIM2 编码器和 DMA。
+    // 使用 PA3 直接发送 WS2812 时序，作为 DMA 异常时的备用路径。
     void WS2812_SendSoftware(void)
     {
 #if defined(STM32F4) || defined(STM32F4xx)
@@ -192,10 +192,9 @@ public:
 #endif
     }
 
-    // 旧 DMA 实现保留作历史参考，不参与当前构建。
+    // 通过 TIM5_CH4 DMA 发送 WS2812 数据，避免占用 TIM2 编码器。
     void WS2812_SendDma(void)
     {
-        static bool dmaActive = false;
         uint32_t index = 0;
         if (dmaActive)
             return;
@@ -293,7 +292,7 @@ public:
     // 用两个相邻颜色的线性插值（factor1/factor2）模拟 HSV 旋转。
 #endif
 
-    // 后续灯效统一使用独立的软件时序发送。
+    // 后续灯效统一使用 TIM5 DMA 发送。
 #define WS2812_Send WS2812_SendDma
 
     void RainBow()
