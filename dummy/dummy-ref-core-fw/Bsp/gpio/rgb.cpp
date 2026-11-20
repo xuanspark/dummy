@@ -108,7 +108,6 @@ void RGB::Interrupt(uint8_t flag) {
 #if defined(TIM_DMA_CC4) && defined(TIM_CCER_CC4E)
         __HAL_TIM_DISABLE_DMA(&htim2, TIM_DMA_CC4);
         CLEAR_BIT(htim2.Instance->CCER, TIM_CCER_CC4E);
-        __HAL_TIM_DISABLE(&htim2);
 #endif
         dmaActive = false;
     }

@@ -139,7 +139,6 @@ public:
 #if defined(TIM_DMA_CC4) && defined(TIM_CCER_CC4E)
             __HAL_TIM_DISABLE_DMA(&htim2, TIM_DMA_CC4);
             CLEAR_BIT(htim2.Instance->CCER, TIM_CCER_CC4E);
-            __HAL_TIM_DISABLE(&htim2);
             (void)HAL_DMA_Abort(&hdma_tim2_ch2_ch4);
 #endif
             dmaActive = false;
