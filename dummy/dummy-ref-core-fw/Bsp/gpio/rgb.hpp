@@ -209,7 +209,7 @@ public:
                 pwmData[index++] = (color & (1UL << bit)) ? 70U : 35U;
         }
         for (uint32_t i = 0; i < 50U; ++i)
-            pwmData[index++] = 0U;
+            pwmData[index++] = 1U;
         data_sentflag = 0;
         dmaActive = true;
         if (HAL_TIM_PWM_Start_DMA(&htim5, TIM_CHANNEL_4, pwmData, index) != HAL_OK)
