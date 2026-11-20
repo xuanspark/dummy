@@ -198,6 +198,29 @@ async def test_raw_motion_command_uses_realtime_limit_and_returns_warning(correl
     assert "20" in response.warning
 
 
+async def test_runtime_limit_does_not_replace_saved_speed_ceiling(correlated_pair):
+    """上一条指令的低速限幅不能被误用为下一条指令的保存速度上限。"""
+    robot, transport = correlated_pair
+
+    def limit_reply(wire):
+        request, _ = unpack(wire)
+        lines = ["GetLimit Begin STATE:NORMAL"]
+        for node in range(1, 8):
+            lines.extend([
+                f"LIMIT NODE:{node} ACC:10.000000 APPLIED:10.000000",
+                f"LIMIT NODE:{node} SPEED:30.000000 APPLIED:1.000000",
+                f"LIMIT NODE:{node} CURRENT:1.000000 APPLIED:1.000000",
+            ])
+        return [f"R:{request} {line}" for line in [*lines, "GetLimit End"]]
+
+    transport.on(lambda wire: unpack(wire)[1] == "#GETLIMIT all", limit_reply)
+    transport.on(lambda wire: unpack(wire)[1].startswith("&"),
+                 lambda wire: [f"R:{unpack(wire)[0]} Move OK"])
+    response = await robot.raw("&0,0,90,0,0,0,100")
+    assert response.applied_command == "&0,0,90,0,0,0,30"
+    assert transport.tx_log[-1].endswith(",30")
+
+
 async def test_raw_hand_current_uses_realtime_limit(correlated_pair):
     robot, transport = correlated_pair
 
