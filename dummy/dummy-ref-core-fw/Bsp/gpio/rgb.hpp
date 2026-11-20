@@ -206,7 +206,7 @@ public:
             const uint32_t color = (LED_Data[led][1] << 16) | (LED_Data[led][2] << 8) | LED_Data[led][3];
 #endif
             for (int bit = 23; bit >= 0; --bit)
-                pwmData[index++] = (color & (1UL << bit)) ? 140U : 70U;
+                pwmData[index++] = (color & (1UL << bit)) ? 70U : 35U;
         }
         for (uint32_t i = 0; i < 50U; ++i)
             pwmData[index++] = 0U;
