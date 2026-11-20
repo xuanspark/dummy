@@ -3,7 +3,6 @@
 #include "u8g2.h"
 #include "soft_i2c.h"
 
-#define DEVICE_ADDRESS    0x3C
 #define TX_TIMEOUT        100
 
 #define USE_I2C_INTERFACE
@@ -15,6 +14,49 @@ SPI_HandleTypeDef *U8G2_SPI_HANDLE;
 
 /* I2C Interface */
 I2C_HandleTypeDef *U8G2_I2C_HANDLE;
+extern I2C_HandleTypeDef hi2c2;
+
+static uint8_t oled_device_address = 0x3C;
+static uint8_t oled_bus_probed = 0U;
+
+static uint8_t oled_probe_bus(void)
+{
+    const uint8_t addresses[] = {0x3C, 0x3D};
+
+    for (uint32_t i = 0; i < sizeof(addresses); ++i)
+    {
+        const uint8_t address = addresses[i];
+        if (U8G2_I2C_HANDLE->Instance == I2C_SOFT)
+        {
+            if (SOFT_I2C_IsDeviceReady((uint8_t)(address << 1)))
+            {
+                oled_device_address = address;
+                return 1U;
+            }
+        }
+        else if (HAL_I2C_IsDeviceReady(U8G2_I2C_HANDLE, (uint16_t)(address << 1), 2, TX_TIMEOUT) == HAL_OK)
+        {
+            oled_device_address = address;
+            return 1U;
+        }
+    }
+
+    if (U8G2_I2C_HANDLE->Instance == I2C_SOFT)
+    {
+        for (uint32_t i = 0; i < sizeof(addresses); ++i)
+        {
+            const uint8_t address = addresses[i];
+            if (HAL_I2C_IsDeviceReady(&hi2c2, (uint16_t)(address << 1), 2, TX_TIMEOUT) == HAL_OK)
+            {
+                U8G2_I2C_HANDLE = &hi2c2;
+                oled_device_address = address;
+                return 1U;
+            }
+        }
+    }
+
+    return 0U;
+}
 
 
 uint8_t u8x8_stm32_gpio_and_delay(u8x8_t *u8x8, uint8_t msg, uint8_t arg_int, void *arg_ptr)
@@ -111,11 +153,15 @@ uint8_t u8x8_byte_stm32_hw_i2c(u8x8_t *u8x8, uint8_t msg, uint8_t arg_int, void 
             buf_idx = 0;
             break;
         case U8X8_MSG_BYTE_END_TRANSFER:
+            if (!oled_bus_probed)
+            {
+                oled_bus_probed = 1U;
+                if (!oled_probe_bus())
+                    return 0;
+            }
             if (U8G2_I2C_HANDLE->Instance == I2C_SOFT)
-                SOFT_I2C_Master_Transmit((DEVICE_ADDRESS << 1), buffer, buf_idx);
-            else
-                HAL_I2C_Master_Transmit(U8G2_I2C_HANDLE, (DEVICE_ADDRESS << 1), buffer, buf_idx, TX_TIMEOUT);
-            break;
+                return SOFT_I2C_Master_Transmit((uint8_t)(oled_device_address << 1), buffer, buf_idx);
+            return HAL_I2C_Master_Transmit(U8G2_I2C_HANDLE, (uint16_t)(oled_device_address << 1), buffer, buf_idx, TX_TIMEOUT) == HAL_OK;
         default:
             return 0;
     }

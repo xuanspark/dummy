@@ -44,7 +44,9 @@ uint8_t Soft_I2C_Wait_Ack(void);
 
 void delay_xus(__IO uint32_t nTime);
 
-void SOFT_I2C_Master_Transmit(uint8_t daddr, uint8_t *buff, uint8_t len);
+uint8_t SOFT_I2C_IsDeviceReady(uint8_t daddr);
+
+uint8_t SOFT_I2C_Master_Transmit(uint8_t daddr, uint8_t *buff, uint8_t len);
 
 
 #define Delay_us(xx)  delay_xus(xx)

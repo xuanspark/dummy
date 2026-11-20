@@ -40,9 +40,10 @@ void delay_xus(__IO uint32_t nTime)
 //--------------------------------------------
 void SDA_Output(void)
 {
-    GPIO_InitTypeDef GPIO_InitStruct;
+    GPIO_InitTypeDef GPIO_InitStruct = {0};
     GPIO_InitStruct.Pin = MYI2C_SDA_PIN;
-    GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+    GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_OD;
+    GPIO_InitStruct.Pull = GPIO_PULLUP;
     GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
     HAL_GPIO_Init(MYI2C_SDA_PORT, &GPIO_InitStruct);
 }
@@ -50,7 +51,7 @@ void SDA_Output(void)
 
 void SDA_Input(void)
 {
-    GPIO_InitTypeDef GPIO_InitStruct;
+    GPIO_InitTypeDef GPIO_InitStruct = {0};
     GPIO_InitStruct.Pin = MYI2C_SDA_PIN;
     GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
     GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
@@ -59,9 +60,10 @@ void SDA_Input(void)
 
 void SCL_Output(void)
 {
-    GPIO_InitTypeDef GPIO_InitStruct;
+    GPIO_InitTypeDef GPIO_InitStruct = {0};
     GPIO_InitStruct.Pin = MYI2C_SCL_PIN;
-    GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+    GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_OD;
+    GPIO_InitStruct.Pull = GPIO_PULLUP;
     GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
     HAL_GPIO_Init(MYI2C_SCL_PORT, &GPIO_InitStruct);
 }
@@ -69,7 +71,7 @@ void SCL_Output(void)
 
 void SCL_Input(void)
 {
-    GPIO_InitTypeDef GPIO_InitStruct;
+    GPIO_InitTypeDef GPIO_InitStruct = {0};
     GPIO_InitStruct.Pin = MYI2C_SCL_PIN;
     GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
     GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
@@ -204,17 +206,33 @@ uint8_t Soft_I2C_Read_Byte(uint8_t ack)
 }
 
 
-void SOFT_I2C_Master_Transmit(uint8_t daddr, uint8_t *buff, uint8_t len)
+uint8_t SOFT_I2C_IsDeviceReady(uint8_t daddr)
 {
+    uint8_t acknowledged;
+
     Soft_I2C_Start();
     Soft_I2C_Send_Byte(daddr);
-    Soft_I2C_Wait_Ack();
+    acknowledged = (Soft_I2C_Wait_Ack() == 0U) ? 1U : 0U;
+    Soft_I2C_Stop();
+    return acknowledged;
+}
+
+uint8_t SOFT_I2C_Master_Transmit(uint8_t daddr, uint8_t *buff, uint8_t len)
+{
+    uint8_t acknowledged = 1U;
+
+    Soft_I2C_Start();
+    Soft_I2C_Send_Byte(daddr);
+    if (Soft_I2C_Wait_Ack() != 0U)
+        acknowledged = 0U;
 
     for (int i = 0; i < len; i++)
     {
         Soft_I2C_Send_Byte(*(buff + i));
-        Soft_I2C_Wait_Ack();
+        if (Soft_I2C_Wait_Ack() != 0U)
+            acknowledged = 0U;
     }
 
     Soft_I2C_Stop();
+    return acknowledged;
 }
