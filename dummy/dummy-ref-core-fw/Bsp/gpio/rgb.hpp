@@ -145,8 +145,10 @@ public:
         }
 
         const uint32_t periodCycles = SystemCoreClock / 800000U;
-        const uint32_t highZeroCycles = SystemCoreClock * 35U / 100000000U;
-        const uint32_t highOneCycles = SystemCoreClock * 70U / 100000000U;
+        const uint32_t highZeroCycles = static_cast<uint32_t>(
+            (static_cast<uint64_t>(SystemCoreClock) * 35ULL) / 100000000ULL);
+        const uint32_t highOneCycles = static_cast<uint32_t>(
+            (static_cast<uint64_t>(SystemCoreClock) * 70ULL) / 100000000ULL);
         GPIO_InitTypeDef gpio = {0};
         gpio.Pin = RGB_Pin;
         gpio.Mode = GPIO_MODE_OUTPUT_PP;
