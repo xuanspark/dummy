@@ -318,8 +318,9 @@ public:
     // 用两个相邻颜色的线性插值（factor1/factor2）模拟 HSV 旋转。
 #endif
 
-    // 后续灯效统一使用 TIM5 DMA 发送。
-#define WS2812_Send WS2812_SendDma
+// REF 当前优先使用 GPIO 精确时序发送，避免 DMA 收尾或请求映射异常造成残帧乱色。
+// TIM5 DMA 实现保留在 WS2812_SendDma 中，待 ST-Link 复测寄存器后再决定是否恢复。
+#define WS2812_Send WS2812_SendSoftware
 
     void RainBow()
     {
