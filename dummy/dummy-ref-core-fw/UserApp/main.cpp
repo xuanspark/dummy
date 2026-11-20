@@ -227,7 +227,8 @@ void Main(void)
 
     // Init OLED 128x80.
     oled.Init();
-    pwm.Start();
+    // PA3 专用于 WS2812 数据，不能启动 TIM9_CH2；只启动实际使用的 CH_A1。
+    pwm.Start(PWM::CH_A1);
 
     // Init & Run User Threads.
     const osThreadAttr_t controlLoopTask_attributes = {

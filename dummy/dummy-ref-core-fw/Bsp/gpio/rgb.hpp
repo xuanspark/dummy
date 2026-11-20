@@ -177,11 +177,13 @@ public:
         delayUntil(DWT->CYCCNT + (SystemCoreClock / 1000000U) * 80U);
         __enable_irq();
 
-        // 恢复 PA3 的 TIM9_CH2 复用，保留原有 PWM 引脚配置。
-        gpio.Mode = GPIO_MODE_AF_PP;
-        gpio.Speed = GPIO_SPEED_FREQ_LOW;
-        gpio.Alternate = GPIO_AF3_TIM9;
+        // PA3 是 WS2812 数据脚，发送完成后必须继续保持 GPIO 输出低电平。
+        // 不能恢复为 TIM9_CH2 复用，否则 21 kHz PWM 会覆盖灯珠的空闲电平。
+        gpio.Mode = GPIO_MODE_OUTPUT_PP;
+        gpio.Pull = GPIO_NOPULL;
+        gpio.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
         HAL_GPIO_Init(RGB_GPIO_Port, &gpio);
+        HAL_GPIO_WritePin(RGB_GPIO_Port, RGB_Pin, GPIO_PIN_RESET);
 #endif
     }
 
