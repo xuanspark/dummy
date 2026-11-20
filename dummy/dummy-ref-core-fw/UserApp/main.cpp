@@ -91,7 +91,17 @@ void ThreadOledUpdate(void* argument)
         oled.clearBuffer();
         oled.setFont(u8g2_font_5x8_tr);
         oled.setCursor(0, 10);
-        oled.printf(imuReady ? "IMU:%.3f/%.3f" : "IMU:OFF", mpu6050.data.ax, mpu6050.data.ay);
+        if (imuReady)
+        {
+            // 避免在任务栈中使用浮点格式化，防止 newlib 浮点转换触发断言退出。
+            const int imuAxMilli = static_cast<int>(mpu6050.data.ax * 1000.0f);
+            const int imuAyMilli = static_cast<int>(mpu6050.data.ay * 1000.0f);
+            oled.printf("IMU:%d/%d", imuAxMilli, imuAyMilli);
+        }
+        else
+        {
+            oled.printf("IMU:OFF");
+        }
         oled.setCursor(85, 10);
         const uint32_t now = micros();
         const uint32_t elapsed = now - t;
