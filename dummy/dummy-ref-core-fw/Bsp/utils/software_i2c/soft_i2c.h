@@ -8,7 +8,7 @@ extern "C" {
 #include "stm32f4xx_hal.h"
 #include "gpio.h"
 
-#define CPU_FREQUENCY_MHZ   168
+#define CPU_FREQUENCY_MHZ   0 //4
 #define MYI2C_SCL_PIN        GPIO_PIN_10
 #define MYI2C_SCL_PORT        GPIOB
 #define MYI2C_SDA_PIN            GPIO_PIN_11
