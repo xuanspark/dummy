@@ -9,8 +9,8 @@
 #include "common_inc.h"
 
 
-// On-board Screen, can choose from hi2c2 or hi2c0(soft i2c)
-SSD1306 oled(&hi2c0);
+// REF OLED 使用已初始化的硬件 I2C2（PB10/PB11），避免软件 I2C 时序受任务调度影响。
+SSD1306 oled(&hi2c2);
 // On-board Sensor, used hi2c1
 MPU6050 mpu6050(&hi2c1);
 // 5 User-Timers, can choose from htim7/htim10/htim11/htim13/htim14
