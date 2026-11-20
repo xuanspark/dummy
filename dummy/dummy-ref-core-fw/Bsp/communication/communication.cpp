@@ -19,11 +19,11 @@ volatile bool endpointListValid = false;
 
 /* ----- 函数实现 ----------------------------------------------------- */
 // commTask 句柄与属性：负责依次启动 UART / USB / CAN1 / CAN2 服务器。
-// 需要 45 KB 栈是因为 fibre 发布时会临时拼出较大的对象树。
+// fibre 发布时实际使用的栈空间较小，保留余量并避免过大的动态分配。
 osThreadId_t commTaskHandle;
 const osThreadAttr_t commTask_attributes = {
     .name = "commTask",
-    .stack_size = 45000,
+    .stack_size = 16000,
     .priority = (osPriority_t) osPriorityNormal,
 };
 
@@ -69,8 +69,10 @@ void CommunicationTask(void* ctx)
         HandleRuntimeInitFailure();
     }
     endpointListValid = true;
-    // 发布结束后释放大栈，避免常驻占用 45KB 导致动作或 RGB 任务创建失败。
-    osThreadExit();
+    // 初始化任务不再自删。旧实现在线程自删和调度切换交界处可能留下失效
+    // 的当前任务上下文，导致启动阶段进入 HardFault。挂起当前任务即可让
+    // 后续通信服务继续运行，同时保留有效的 FreeRTOS 任务控制块。
+    osThreadSuspend(commTaskHandle);
 }
 
 // newlib 的低层写接口。printf / puts / std::cout 最终都会调下面的 _write。

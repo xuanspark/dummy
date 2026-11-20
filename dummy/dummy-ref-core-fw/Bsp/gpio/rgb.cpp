@@ -1,10 +1,5 @@
 #include "rgb.hpp"
 
-// 兼容旧版接口；当前 RGB 发送不再使用该 DMA 句柄。
-#if defined(STM32F4) || defined(STM32F4xx)
-DMA_HandleTypeDef hdma_tim2_ch2_ch4;
-#endif
-
 // ---------------------------------------------------------------------------
 // 构造函数：mode 参数预留扩展点，目前未在构造期初始化任何硬件资源。
 // 真正的硬件初始化（TIM2 + DMA）由 STM32CubeMX 在 main.cpp 启动时完成。
@@ -107,15 +102,7 @@ void RGB::Run(RGB::Rgb_style_t mode) {
 // ---------------------------------------------------------------------------
 void RGB::Interrupt(uint8_t flag) {
     data_sentflag = flag;
-    if (flag)
-    {
-        // DMA 完成回调只做寄存器级收尾，避免在中断中调用 HAL_DMA_Abort_IT。
-#if defined(TIM_DMA_CC4) && defined(TIM_CCER_CC4E)
-        __HAL_TIM_DISABLE_DMA(&htim2, TIM_DMA_CC4);
-        CLEAR_BIT(htim2.Instance->CCER, TIM_CCER_CC4E);
-#endif
-        dmaActive = false;
-    }
+    dmaActive = false;
 }
 
 
