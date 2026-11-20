@@ -1,5 +1,10 @@
 #include "rgb.hpp"
 
+// 兼容旧版接口；当前 RGB 发送不再使用该 DMA 句柄。
+#if defined(STM32F4) || defined(STM32F4xx)
+DMA_HandleTypeDef hdma_tim2_ch2_ch4;
+#endif
+
 // ---------------------------------------------------------------------------
 // 构造函数：mode 参数预留扩展点，目前未在构造期初始化任何硬件资源。
 // 真正的硬件初始化（TIM2 + DMA）由 STM32CubeMX 在 main.cpp 启动时完成。

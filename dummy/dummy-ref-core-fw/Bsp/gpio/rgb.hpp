@@ -128,6 +128,69 @@ public:
     // WS2812 协议：每 bit 由一段 PWM 高电平时长决定（0:1/3 周期，1:2/3 周期），
     // 末尾 50 µs 低电平作为 reset 间隙。这里 PWM 周期 = 105 计数（70 = 2/3，30 = 1/3）。
     // DMA 启动后阻塞等待 data_sentflag（由 PulseFinished 回调置 1）。
+    // 使用 PA3 直接发送 WS2812 时序，避免占用 TIM2 编码器和 DMA。
+    void WS2812_SendSoftware(void)
+    {
+#if defined(STM32F4) || defined(STM32F4xx)
+        static bool cycleCounterReady = false;
+        if (!cycleCounterReady)
+        {
+            CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+            DWT->CYCCNT = 0;
+            DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+            cycleCounterReady = true;
+        }
+
+        const uint32_t periodCycles = SystemCoreClock / 800000U;
+        const uint32_t highZeroCycles = SystemCoreClock * 35U / 100000000U;
+        const uint32_t highOneCycles = SystemCoreClock * 70U / 100000000U;
+        GPIO_InitTypeDef gpio = {0};
+        gpio.Pin = RGB_Pin;
+        gpio.Mode = GPIO_MODE_OUTPUT_PP;
+        gpio.Pull = GPIO_NOPULL;
+        gpio.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+
+        auto delayUntil = [](uint32_t deadline) {
+            while (static_cast<uint32_t>(DWT->CYCCNT - deadline) & 0x80000000U) {}
+        };
+
+        __disable_irq();
+        HAL_GPIO_Init(RGB_GPIO_Port, &gpio);
+        HAL_GPIO_WritePin(RGB_GPIO_Port, RGB_Pin, GPIO_PIN_RESET);
+
+        for (uint16_t led = 0; led < MAX_LED; led++)
+        {
+            uint32_t color;
+#if USE_BRIGHTNESS
+            color = ((LED_Mod[led][1] << 16) | (LED_Mod[led][2] << 8) | LED_Mod[led][3]);
+#else
+            color = ((LED_Data[led][1] << 16) | (LED_Data[led][2] << 8) | LED_Data[led][3]);
+#endif
+            for (int bit = 23; bit >= 0; bit--)
+            {
+                const uint32_t start = DWT->CYCCNT;
+                const uint32_t highCycles = (color & (1UL << bit)) ? highOneCycles : highZeroCycles;
+                RGB_GPIO_Port->BSRR = RGB_Pin;
+                delayUntil(start + highCycles);
+                RGB_GPIO_Port->BSRR = static_cast<uint32_t>(RGB_Pin) << 16U;
+                delayUntil(start + periodCycles);
+            }
+        }
+
+        HAL_GPIO_WritePin(RGB_GPIO_Port, RGB_Pin, GPIO_PIN_RESET);
+        delayUntil(DWT->CYCCNT + (SystemCoreClock / 1000000U) * 80U);
+        __enable_irq();
+
+        // 恢复 PA3 的 TIM9_CH2 复用，保留原有 PWM 引脚配置。
+        gpio.Mode = GPIO_MODE_AF_PP;
+        gpio.Speed = GPIO_SPEED_FREQ_LOW;
+        gpio.Alternate = GPIO_AF3_TIM9;
+        HAL_GPIO_Init(RGB_GPIO_Port, &gpio);
+#endif
+    }
+
+    // 旧 DMA 实现保留作历史参考，不参与当前构建。
+#if 0
     void WS2812_Send (void)
     {
         const uint32_t now = HAL_GetTick();
@@ -190,6 +253,11 @@ public:
 
     // 彩虹流水：12 个 step 一周期，每颗灯按位置偏移取色相，颜色平滑过渡。
     // 用两个相邻颜色的线性插值（factor1/factor2）模拟 HSV 旋转。
+#endif
+
+    // 后续灯效统一使用独立的软件时序发送。
+#define WS2812_Send WS2812_SendSoftware
+
     void RainBow()
     {
         float factor1, factor2;
