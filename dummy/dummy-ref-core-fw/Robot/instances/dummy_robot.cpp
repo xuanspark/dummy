@@ -780,7 +780,10 @@ void DummyRobot::SaveRGBModeToEEPROM() { eeprom.write(EEPROM_ADDR_RGB_MODE, stat
 void DummyRobot::SetRGBAutoSubState(uint8_t state)
 {
     // 动画计步只由 RGB 线程读写，其他线程仅发布状态。
-    rgb.autoSubState = static_cast<RGB::AutoSubState>(state);
+    const auto next = static_cast<RGB::AutoSubState>(state);
+    if (rgb.autoSubState != next)
+        autoIdleTickMs = 0;
+    rgb.autoSubState = next;
 }
 void DummyRobot::NotifyWorkStart() { if (robotState == STATE_NORMAL) SetRGBAutoSubState(RGB::AUTO_WORKING); }
 void DummyRobot::NotifyWorkDone()
@@ -790,18 +793,36 @@ void DummyRobot::NotifyWorkDone()
 void DummyRobot::OnHandActionRGBHook(bool) { NotifyWorkStart(); }
 void DummyRobot::AutoModeIdleTick(uint32_t delta)
 {
-    static uint8_t previous = 0;
-    uint8_t desired = robotState == STATE_EMERGENCY_STOP ? RGB::AUTO_ESTOP :
-        robotState == STATE_PAUSED ? RGB::AUTO_PAUSED : rgb.autoSubState;
-    if (desired != previous) {
-        previous = desired;
-        rgb.autoSubState = static_cast<RGB::AutoSubState>(desired);
-        rgb.ResetEffectSteps();
+    // 自动模式只根据当前机器人状态决定灯效，避免手动模式残留状态干扰。
+    // 优先级：急停 > 暂停 > 工作中 > 完成提示 > 待机。
+    static RGB::AutoSubState previous = RGB::AUTO_STANDBY;
+    RGB::AutoSubState desired = RGB::AUTO_STANDBY;
+    if (robotState == STATE_EMERGENCY_STOP)
+        desired = RGB::AUTO_ESTOP;
+    else if (robotState == STATE_PAUSED)
+        desired = RGB::AUTO_PAUSED;
+    else if (taskActive || armMotionActive || scheduledActions != 0)
+        desired = RGB::AUTO_WORKING;
+    else if (rgb.autoSubState == RGB::AUTO_COMPLETE)
+    {
+        desired = RGB::AUTO_COMPLETE;
+        autoIdleTickMs += delta;
+        if (autoIdleTickMs >= AUTO_IDLE_THRESHOLD_MS)
+        {
+            desired = RGB::AUTO_STANDBY;
+            autoIdleTickMs = 0;
+        }
+    }
+    else
+    {
         autoIdleTickMs = 0;
     }
-    if (desired == RGB::AUTO_COMPLETE && !taskActive) {
-        autoIdleTickMs += delta;
-        if (autoIdleTickMs >= AUTO_IDLE_THRESHOLD_MS) SetRGBAutoSubState(RGB::AUTO_STANDBY);
+
+    if (desired != previous)
+    {
+        previous = desired;
+        rgb.autoSubState = desired;
+        rgb.ResetEffectSteps();
     }
 }
 void DummyRobot::TuningHelper::SetTuningFlag(uint8_t flag) { tuningFlag = flag; }
