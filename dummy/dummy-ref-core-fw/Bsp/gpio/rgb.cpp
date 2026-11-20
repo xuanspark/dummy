@@ -125,7 +125,6 @@ void RGB::Run(RGB::Rgb_style_t mode) {
 // ---------------------------------------------------------------------------
 void RGB::Interrupt(uint8_t flag) {
     data_sentflag = flag;
-    dmaActive = false;
 }
 
 

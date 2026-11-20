@@ -25,7 +25,7 @@ class RGB
 private:
     uint8_t LED_Data[MAX_LED][4];     // 每颗灯的目标 GRB 数据：[idx, G, R, B]
     uint8_t LED_Mod[MAX_LED][4];      // Set_Brightness 调整后的中间缓冲（仅 USE_BRIGHTNESS 启用时使用）
-    uint32_t pwmData[(24*MAX_LED)+50];// PWM 比较值缓冲（每灯 24 bit + 末尾 30 个 0 用于 reset 间隙）
+    uint32_t pwmData[(24*MAX_LED)+80];// PWM 比较值缓冲（每灯 24 bit + 复位间隙）
     uint16_t  effStep = 0;            // 彩虹/Blink/Fade/YellowFlow 共用的相位计步器
     uint16_t  breathStep = 0;         // 呼吸灯独立计步（与 effStep 分离，避免互相干扰）
     uint16_t  flashStep = 0;          // 急停快闪/慢闪独立计步
@@ -195,6 +195,8 @@ public:
     // 通过 TIM5_CH4 DMA 发送 WS2812 数据，避免占用 TIM2 编码器。
     void WS2812_SendDma(void)
     {
+        constexpr uint32_t resetCycles = 80U;
+        constexpr uint32_t resetCompare = 2U;
         uint32_t index = 0;
         if (dmaActive)
             return;
@@ -208,10 +210,13 @@ public:
             for (int bit = 23; bit >= 0; --bit)
                 pwmData[index++] = (color & (1UL << bit)) ? 70U : 35U;
         }
-        for (uint32_t i = 0; i < 50U; ++i)
-            pwmData[index++] = 1U;
+        // DMA 通过 CC4 事件推进，复位段不能使用 0，否则不会产生后续 DMA 请求。
+        // 使用很短的低电平脉冲并延长复位窗口，兼顾 DMA 推进和 WS2812 复位要求。
+        for (uint32_t i = 0; i < resetCycles; ++i)
+            pwmData[index++] = resetCompare;
         data_sentflag = 0;
         dmaActive = true;
+        __DMB();
         if (HAL_TIM_PWM_Start_DMA(&htim5, TIM_CHANNEL_4, pwmData, index) != HAL_OK)
         {
             dmaActive = false;
@@ -219,12 +224,18 @@ public:
         }
         const uint32_t started = HAL_GetTick();
         while (!data_sentflag && (HAL_GetTick() - started) < 10U) {}
-        if (!data_sentflag)
+        if (data_sentflag)
+        {
+            // 不在 DMA 中断里停止 DMA，避免中断上下文中 Abort 当前 DMA 流。
+            HAL_TIM_PWM_Stop_DMA(&htim5, TIM_CHANNEL_4);
+            data_sentflag = 0;
+            dmaActive = false;
+        }
+        else
         {
             HAL_TIM_PWM_Stop_DMA(&htim5, TIM_CHANNEL_4);
             dmaActive = false;
         }
-        data_sentflag = 0;
     }
 
 #if 0
