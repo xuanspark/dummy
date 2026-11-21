@@ -26,9 +26,10 @@ uint32_t osThreadFlagsWait(uint32_t, uint32_t, uint32_t);
 void osDelay(uint32_t);
 uint32_t HAL_GetTick();
 inline void HAL_Delay(uint32_t value) { osDelay(value); }
-inline uint32_t __get_PRIMASK() { return 0; }
-inline void __disable_irq() {}
-inline void __set_PRIMASK(uint32_t) {}
+inline uint32_t simulatedPrimask = 0;
+inline uint32_t __get_PRIMASK() { return simulatedPrimask; }
+inline void __disable_irq() { simulatedPrimask = 1; }
+inline void __set_PRIMASK(uint32_t value) { simulatedPrimask = value; }
 void HAL_NVIC_SystemReset();
 
 struct CAN_HandleTypeDef { int Instance = 1; };

@@ -522,6 +522,11 @@ uint32_t DummyRobot::CommandHandler::Push(const char* command, uint8_t channel, 
     std::memcpy(message.text, command, length);
     message.channel = channel;
     message.request = request;
+    // 浮点解析放在临界区外，避免阻塞 USB、CAN 与急停中断。
+    float values[6] = {};
+    const bool hasJointTarget = command[0] == '&' &&
+        sscanf(command + 1, "%f,%f,%f,%f,%f,%f", values, values + 1, values + 2,
+               values + 3, values + 4, values + 5) == 6;
     uint32_t mask = __get_PRIMASK();
     __disable_irq();
     if (context->maintenanceActive || context->robotState != STATE_NORMAL || context->pauseRequested) {
@@ -531,12 +536,9 @@ uint32_t DummyRobot::CommandHandler::Push(const char* command, uint8_t channel, 
     }
     // 模式 2 在当前动作执行期间直接替换目标，不再把过期目标排到队尾。
     if (context->commandMode == COMMAND_TARGET_POINT_INTERRUPTABLE && context->taskActive &&
-        command[0] == '&') {
-        float values[6] = {};
-        int count = sscanf(command + 1, "%f,%f,%f,%f,%f,%f", values, values + 1, values + 2,
-                           values + 3, values + 4, values + 5);
-        if (count == 6 && context->MoveJ(values[0], values[1], values[2], values[3], values[4], values[5]))
-            return 0xfa;
+        hasJointTarget && context->MoveJ(values[0], values[1], values[2], values[3], values[4], values[5])) {
+        __set_PRIMASK(mask);
+        return 0xfa;
     }
     ++context->scheduledActions;
     auto status = osMessageQueuePut(commandFifo, &message, 0, 0);

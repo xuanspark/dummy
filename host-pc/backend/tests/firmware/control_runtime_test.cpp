@@ -440,6 +440,52 @@ int main()
         ASCII_protocol_parse_stream(reinterpret_cast<const uint8_t*>(usbTail.data()), usbTail.size(), usb);
         ProcessAsciiCommand(0); ProcessAsciiCommand(0);
         Require(usb.text.find("GetSpeed OK") != std::string::npos && uart4.text.find("GetSpeed OK") != std::string::npos, "split_channels_are_independent");
+        // 中断状态必须由调用方继承；目标替换、排队及拒绝路径都不能遗留关中断。
+        Reset();
+        dummy.SetCommandMode(2);
+        for (uint32_t initialMask : {0u, 1u}) {
+            __set_PRIMASK(initialMask);
+            dummy.taskActive = true;
+            Require(dummy.commandHandler.Push("&5,0,90,0,0,0,2") == 0xfa,
+                    "active_mode2_replaces_target");
+            Require(__get_PRIMASK() == initialMask, "target_replacement_restores_primask");
+            Require(dummy.commandHandler.GetSpace() == 16 && dummy.scheduledActions == 0,
+                    "replacement_does_not_enqueue");
+            dummy.taskActive = false;
+            Require(dummy.commandHandler.Push("!HOME") == 15, "idle_action_enqueues");
+            Require(__get_PRIMASK() == initialMask, "enqueue_restores_primask");
+            dummy.commandHandler.ClearFifo();
+            Require(__get_PRIMASK() == initialMask, "clear_queue_restores_primask");
+            dummy.maintenanceActive = true;
+            Require(dummy.commandHandler.Push("!HOME") == 0xfc, "maintenance_rejects_action");
+            Require(__get_PRIMASK() == initialMask, "rejection_restores_primask");
+            dummy.maintenanceActive = false;
+            for (int i = 0; i < 16; ++i) dummy.commandHandler.Push("!HOME");
+            Require(dummy.commandHandler.Push("!HOME") == 0xff, "full_queue_rejects_action");
+            Require(__get_PRIMASK() == initialMask && dummy.scheduledActions == 16,
+                    "full_queue_restores_primask_and_count");
+            dummy.commandHandler.ClearFifo();
+        }
+        __set_PRIMASK(0);
+
+        Reset();
+        Require(dummy.Homing(), "prepare_target_replacement_motion");
+        Send("&70,0,90,0,0,0,2");
+        bool replacedTarget = false;
+        delayHook = [&] {
+            if (!replacedTarget && dummy.IsMoving()) {
+                replacedTarget = true;
+                Send("&10,0,90,0,0,0,2");
+                Require(__get_PRIMASK() == 0, "inflight_replacement_keeps_interrupts_enabled");
+            }
+        };
+        RunOne(); delayHook = {};
+        Require(replacedTarget && fabsf(dummy.currentJoints.a[0] - 10) < 0.5f &&
+                dummy.robotState == DummyRobot::STATE_NORMAL && dummy.scheduledActions == 0,
+                "replaced_target_completes_without_extra_queue");
+        Send("#STATUS"); ProcessAsciiCommand(0);
+        Require(usb.text.find("STATE:NORMAL") != std::string::npos,
+                "query_works_after_target_replacement");
         std::cout << "firmware runtime scenarios passed\n";
         return 0;
     } catch (const std::exception& error) {
