@@ -15,7 +15,8 @@ extern "C" {
 extern osSemaphoreId sem_uart4_dma;     // UART4 TxCplt 后释放，让下一次 process_bytes 能发送
 extern osSemaphoreId sem_uart5_dma;     // UART5 同上
 extern osSemaphoreId sem_usb_rx;        // USB CDC RX 包准备就绪的信号
-extern osSemaphoreId sem_usb_tx;        // USB CDC TX 完成信号（CDC_TransmitCplt 释放）
+extern osSemaphoreId sem_usb_tx_cdc;    // USB CDC TX 完成信号
+extern osSemaphoreId sem_usb_tx_native; // USB Native TX 完成信号
 extern osSemaphoreId sem_can1_tx;       // CAN1 TX 邮箱空闲信号（TxComplete/Abort/Error 释放）
 extern osSemaphoreId sem_can2_tx;       // CAN2 同上
 

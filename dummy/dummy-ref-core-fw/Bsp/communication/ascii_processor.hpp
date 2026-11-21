@@ -55,7 +55,7 @@ private:
 // 请使用本函数而不是 printf：printf 会同时复制到所有通道。
 //
 // 注意：这里把 "<text>\r\n" 合并到 *同一次* process_bytes 调用。原版本拆成两次，
-// USB CDC 路径下每次 process_bytes 都要单独抢 sem_usb_tx（仅 10ms 超时），
+// USB CDC 路径下每次 process_bytes 都要单独抢 CDC TX 信号量（有限超时），
 // 当后一次抢不到时返回 -1，"\r\n" 直接被丢；下一次 Respond 第一个分包又会
 // 与上一次未完成的 IN 抢，于是出现"只发出第一行，后续 N 行全丢"的现象。
 // 一次发完整行后，每个 Respond 只占 1 个 USB packet，不再有这个竞态。

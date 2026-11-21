@@ -2,7 +2,7 @@
 //  interface_usb.hpp —— USB-CDC 通道公共接口
 // ----------------------------------------------------------------------------
 //  - 暴露 usbStreamOutputPtr（StreamSink）供 Respond 等使用
-//  - 内部 USBSender 封装了 CDC_Transmit_FS + sem_usb_tx 信号量保护
+//  - 内部 USBSender 封装了 CDC_Transmit_FS 和端点专用信号量保护
 //  - 实现细节见 interface_usb.cpp（含本轮修复的 100ms 超时与"超时不强发"策略）
 // ============================================================================
 #ifndef __INTERFACE_USB_HPP

@@ -52,7 +52,8 @@
 osSemaphoreId sem_uart4_dma;
 osSemaphoreId sem_uart5_dma;
 osSemaphoreId sem_usb_rx;
-osSemaphoreId sem_usb_tx;
+osSemaphoreId sem_usb_tx_cdc;
+osSemaphoreId sem_usb_tx_native;
 osSemaphoreId sem_can1_tx;
 osSemaphoreId sem_can2_tx;
 
@@ -101,16 +102,19 @@ void MX_FREERTOS_Init(void) {
     osSemaphoreDef(sem_usb_rx);
     sem_usb_rx = osSemaphoreNew(1, 0, osSemaphore(sem_usb_rx));
 
-    // Create a semaphore for USB TX
-    osSemaphoreDef(sem_usb_tx);
-    sem_usb_tx = osSemaphoreNew(1, 1, osSemaphore(sem_usb_tx));
+    // 为两个 USB IN 端点分别创建发送完成信号量，避免 CDC 与 Native 互相释放信号。
+    osSemaphoreDef(sem_usb_tx_cdc);
+    sem_usb_tx_cdc = osSemaphoreNew(1, 1, osSemaphore(sem_usb_tx_cdc));
+    osSemaphoreDef(sem_usb_tx_native);
+    sem_usb_tx_native = osSemaphoreNew(1, 1, osSemaphore(sem_usb_tx_native));
 
     // Create a semaphore for CAN TX
     osSemaphoreDef(sem_can1_tx);
     sem_can1_tx = osSemaphoreNew(1, 1, osSemaphore(sem_can1_tx));
     osSemaphoreDef(sem_can2_tx);
     sem_can2_tx = osSemaphoreNew(1, 1, osSemaphore(sem_can2_tx));
-    if (!sem_uart4_dma || !sem_uart5_dma || !sem_usb_rx || !sem_usb_tx ||
+    if (!sem_uart4_dma || !sem_uart5_dma || !sem_usb_rx || !sem_usb_tx_cdc ||
+        !sem_usb_tx_native ||
         !sem_can1_tx || !sem_can2_tx)
     {
         Error_Handler();

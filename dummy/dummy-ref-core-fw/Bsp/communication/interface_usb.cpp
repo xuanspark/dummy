@@ -60,9 +60,9 @@ private:
     uint8_t tx_buffer_[USB_TX_DATA_SIZE];
 };
 
-// 注意：这里可以为两个发送器使用独立信号量以允许并发发送，当前共用一个
-USBSender usb_packet_output_cdc(CDC_OUT_EP, sem_usb_tx);
-USBSender usb_packet_output_native(ODRIVE_OUT_EP, sem_usb_tx);
+// 两个发送器使用各自的信号量，避免 CDC 与 Native 的完成回调互相影响。
+USBSender usb_packet_output_cdc(CDC_OUT_EP, sem_usb_tx_cdc);
+USBSender usb_packet_output_native(ODRIVE_OUT_EP, sem_usb_tx_native);
 
 class TreatPacketSinkAsStreamSink : public StreamSink
 {

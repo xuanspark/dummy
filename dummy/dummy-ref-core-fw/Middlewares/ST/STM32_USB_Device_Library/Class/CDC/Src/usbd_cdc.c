@@ -567,13 +567,16 @@ static uint8_t  USBD_CDC_DataIn (USBD_HandleTypeDef *pdev, uint8_t epnum)
 
     if(pdev->pClassData != NULL)
     {
-        // NOTE: We would logically expect xx_IN_EP here, but we actually get the xx_OUT_EP
-        if (epnum == CDC_OUT_EP)
+        // 底层回调可能传入去掉方向位的端点号，也可能保留地址，统一按端点号比较。
+        uint8_t endpoint = epnum & 0x7FU;
+        if (endpoint == (CDC_OUT_EP & 0x7FU))
             hcdc->CDC_Tx.State = 0;
-        if (epnum == ODRIVE_OUT_EP)
+        if (endpoint == (ODRIVE_OUT_EP & 0x7FU))
             hcdc->REF_Tx.State = 0;
-        //Note: We could use independent semaphores for simoultainous USB transmission.
-        osSemaphoreRelease(sem_usb_tx);
+        if (endpoint == (CDC_OUT_EP & 0x7FU))
+            osSemaphoreRelease(sem_usb_tx_cdc);
+        else if (endpoint == (ODRIVE_OUT_EP & 0x7FU))
+            osSemaphoreRelease(sem_usb_tx_native);
         return USBD_OK;
     }
     else
