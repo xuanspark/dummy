@@ -319,6 +319,8 @@ void Execute(const Message& message)
             if (complete) Respond(output, "GetLimit End");
             else Respond(output, "GetLimit Error: read_failed state=%s", dummy.StateName());
         } else if (!strcmp(command, "#STATUS")) {
+            // 状态查询必须先主动探测全部节点，避免把上次探测结果当作实时在线状态。
+            dummy.CheckAllNodesOnline();
             Respond(output, "Status OK STATE:%s CAN_RX:%lu CAN_DROP:%lu", dummy.StateName(), dummy.canRxTotal, dummy.canDroppedFrames);
             Respond(output, "FW:%s BUILD:%s %s", CONFIG_FW_VERSION_TEXT, __DATE__, __TIME__);
             const auto fault = dummy.motionFault;
