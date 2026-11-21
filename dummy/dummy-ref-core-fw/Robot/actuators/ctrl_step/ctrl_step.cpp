@@ -141,4 +141,9 @@ void CtrlStepMotor::ConfigSavedCallback(bool saved)
     OnlineCallback();
 }
 void CtrlStepMotor::QueryOnline() { isOnline = false; UpdateAngle(); }
+bool CtrlStepMotor::QueryOnlineChecked()
+{
+    isOnline = false;
+    return Send(0x23);
+}
 void CtrlStepMotor::OnlineCallback() { isOnline = true; lastResponseTick = HAL_GetTick(); }

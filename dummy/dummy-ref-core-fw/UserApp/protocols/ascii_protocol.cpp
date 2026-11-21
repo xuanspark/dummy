@@ -311,6 +311,13 @@ void Execute(const Message& message)
             // 状态查询必须先主动探测全部节点，避免把上次探测结果当作实时在线状态。
             dummy.CheckAllNodesOnline();
             Respond(output, "Status OK STATE:%s CAN_RX:%lu CAN_DROP:%lu", dummy.StateName(), dummy.canRxTotal, dummy.canDroppedFrames);
+#if defined(STM32F4)
+            Respond(output, "CAN_TX TRY:%lu SENT:%lu TIMEOUT:%lu ADD_FAIL:%lu POLICY:%lu COMPLETE:%lu ABORT:%lu ERROR:%lu LAST_ERR:%lu LAST_NODE:%u LAST_CMD:%u",
+                    can1Ctx.tx_attempt_cnt, can1Ctx.tx_msg_cnt, can1Ctx.tx_semaphore_timeout_cnt,
+                    can1Ctx.tx_add_fail_cnt, can1Ctx.tx_policy_reject_cnt, can1Ctx.tx_complete_cnt,
+                    can1Ctx.tx_abort_cnt, can1Ctx.tx_error_cnt, can1Ctx.tx_last_error_code,
+                    can1Ctx.tx_last_node_id, can1Ctx.tx_last_command);
+#endif
             Respond(output, "FW:%s BUILD:%s %s", CONFIG_FW_VERSION_TEXT, __DATE__, __TIME__);
             const auto fault = dummy.motionFault;
             char faultError[24];

@@ -28,6 +28,18 @@
 #include <stm32f4xx_hal.h>
 #include <cmsis_os.h>
 
+namespace {
+constexpr uint32_t CAN_TX_WAIT_MS = 20;
+
+uint32_t CanTxWaitTicks()
+{
+    const uint32_t tickFrequency = osKernelGetTickFreq();
+    if (tickFrequency == 0) return 1;
+    const uint64_t ticks = (static_cast<uint64_t>(CAN_TX_WAIT_MS) * tickFrequency + 999) / 1000;
+    return ticks == 0 ? 1 : static_cast<uint32_t>(ticks);
+}
+}
+
 // 定义于 CubeMX 生成的 can.c
 extern CAN_HandleTypeDef hcan1;
 extern CAN_HandleTypeDef hcan2;
@@ -110,9 +122,8 @@ bool StartCanServer(CAN_TypeDef* hcan)
 
 void tx_complete_callback(CAN_HandleTypeDef* hcan, uint8_t mailbox_idx)
 {
-//    CAN_context* ctx = get_can_ctx(hcan);
-//    if (!ctx) return;
-//    ctx->tx_msg_cnt++;
+    CAN_context* ctx = get_can_ctx(hcan);
+    if (ctx) ctx->tx_complete_cnt++;
 
     if (hcan->Instance == CAN1)
         osSemaphoreRelease(sem_can1_tx);
@@ -122,9 +133,11 @@ void tx_complete_callback(CAN_HandleTypeDef* hcan, uint8_t mailbox_idx)
 
 void tx_aborted_callback(CAN_HandleTypeDef* hcan, uint8_t mailbox_idx)
 {
-    if (!get_can_ctx(hcan))
+    CAN_context* ctx = get_can_ctx(hcan);
+    if (!ctx)
         return;
-    get_can_ctx(hcan)->TxMailboxAbortCallbackCnt++;
+    ctx->TxMailboxAbortCallbackCnt++;
+    ctx->tx_abort_cnt++;
 
     // 修复：abort 同样意味着邮箱不再持有该消息，必须释放对应 TX 信号量，
     // 否则 CanSendMessage 中的 osSemaphoreAcquire 会永久阻塞 ASCII 处理线程。
@@ -143,6 +156,7 @@ void tx_error(CAN_context* ctx, uint8_t mailbox_idx)
     // 后续所有命令拖累超时（host-pc 端表现为"中毒"）。
     if (!ctx)
         return;
+    ctx->tx_error_cnt++;
     if (ctx->handle->Instance == CAN1)
         osSemaphoreRelease(sem_can1_tx);
     else if (ctx->handle->Instance == CAN2)
@@ -204,7 +218,8 @@ void HAL_CAN_ErrorCallback(CAN_HandleTypeDef* hcan)
     CAN_context* ctx = get_can_ctx(hcan);
     if (!ctx) return;
     volatile uint32_t original_error = hcan->ErrorCode;
-    (void) original_error;
+    ctx->ErrorCallbackCnt++;
+    ctx->tx_last_error_code = original_error;
 
     // 处理 3 个 TX 邮箱的发送错误（主要为 NAK / Bus-Off / 付错重传超限）
     if (hcan->ErrorCode & HAL_CAN_ERROR_TX_ALST0)
@@ -252,7 +267,13 @@ bool CanSendMessage(CAN_context* canCtx, uint8_t* txData, CAN_TxHeaderTypeDef* t
     extern DummyRobot dummy;
     if (!canCtx || !canCtx->handle) return false;
     uint8_t command = txHeader->StdId & 0x7f;
-    if (canCtx->handle->Instance == CAN1 && !dummy.CanTransmit(command, txData)) return false;
+    canCtx->tx_attempt_cnt++;
+    canCtx->tx_last_node_id = static_cast<uint8_t>(txHeader->StdId >> 7);
+    canCtx->tx_last_command = command;
+    if (canCtx->handle->Instance == CAN1 && !dummy.CanTransmit(command, txData)) {
+        canCtx->tx_policy_reject_cnt++;
+        return false;
+    }
     if (canCtx->handle->Instance == CAN1 && dummy.robotState == DummyRobot::STATE_EMERGENCY_STOP &&
         (command == 0x04 || command == 0x01)) {
         // 急停不等待普通发送信号量；撤销尚未发出的普通报文并直接抢占邮箱。
@@ -267,16 +288,21 @@ bool CanSendMessage(CAN_context* canCtx, uint8_t* txData, CAN_TxHeaderTypeDef* t
         uint32_t mailbox;
         auto result = HAL_CAN_AddTxMessage(canCtx->handle, txHeader, txData, &mailbox);
         __set_PRIMASK(mask);
+        if (result == HAL_OK) {
+            canCtx->tx_msg_cnt++;
+        } else {
+            canCtx->tx_add_fail_cnt++;
+            canCtx->tx_last_error_code = canCtx->handle->ErrorCode;
+        }
         return result == HAL_OK;
     }
-    // 第三道保险：超时改为 100ms，避免任何遗漏的"未释放信号量"路径再次拖死
-    // 调用线程。CAN 节点正常应答的典型耗时 < 1ms，100ms 已是极宽裕；超时即
-    // 安静放弃本次发送，让上层重试或被 dceQueryDone=false 反映为离线。
+    // 发送等待有明确的毫秒上限；超时放弃本次发送，由在线查询层负责有限重试。
     osStatus semaphore_status;
+    const uint32_t waitTicks = CanTxWaitTicks();
     if (canCtx->handle->Instance == CAN1)
-        semaphore_status = osSemaphoreAcquire(sem_can1_tx, 2);
+        semaphore_status = osSemaphoreAcquire(sem_can1_tx, waitTicks);
     else if (canCtx->handle->Instance == CAN2)
-        semaphore_status = osSemaphoreAcquire(sem_can2_tx, 2);
+        semaphore_status = osSemaphoreAcquire(sem_can2_tx, waitTicks);
     else
         return false;
 
@@ -284,16 +310,24 @@ bool CanSendMessage(CAN_context* canCtx, uint8_t* txData, CAN_TxHeaderTypeDef* t
         uint32_t mask = __get_PRIMASK();
         __disable_irq();
         bool allowed = canCtx->handle->Instance != CAN1 || dummy.CanTransmit(command, txData);
+        if (!allowed) canCtx->tx_policy_reject_cnt++;
         HAL_StatusTypeDef result = allowed ?
             HAL_CAN_AddTxMessage(canCtx->handle, txHeader, txData, &canCtx->last_heartbeat_mailbox) : HAL_ERROR;
         __set_PRIMASK(mask);
         if (result != HAL_OK) {
+            if (allowed) {
+                canCtx->tx_add_fail_cnt++;
+                canCtx->tx_last_error_code = canCtx->handle->ErrorCode;
+            }
             if (canCtx->handle->Instance == CAN1) osSemaphoreRelease(sem_can1_tx);
             else osSemaphoreRelease(sem_can2_tx);
+        } else {
+            canCtx->tx_msg_cnt++;
         }
         return result == HAL_OK;
     }
     // 拿不到就直接返回 —— 上层 osDelay + 回调超时已经能识别该节点没回包。
+    canCtx->tx_semaphore_timeout_cnt++;
     return false;
 }
 

@@ -763,16 +763,23 @@ bool DummyRobot::CalibrateHand()
 bool DummyRobot::CheckNodeOnline(uint8_t node)
 {
     if (node < 1 || node > 7) return false;
-    motorJ[node]->QueryOnline();
-    osDelay(80);
-    return motorJ[node]->isOnline;
+    constexpr uint32_t attempts = 3;
+    constexpr uint32_t responseWaitMs = 25;
+    for (uint32_t attempt = 0; attempt < attempts; ++attempt) {
+        const uint32_t queryTick = HAL_GetTick();
+        const bool sent = motorJ[node]->QueryOnlineChecked();
+        while (sent && !motorJ[node]->isOnline && HAL_GetTick() - queryTick < responseWaitMs)
+            osDelay(2);
+        if (motorJ[node]->isOnline) return true;
+        osDelay(2);
+    }
+    return false;
 }
 bool DummyRobot::CheckAllNodesOnline()
 {
-    for (int n = 1; n <= 7; ++n) motorJ[n]->QueryOnline();
-    osDelay(100);
     allNodesOnline = true;
-    for (int n = 1; n <= 7; ++n) if (!motorJ[n]->isOnline) allNodesOnline = false;
+    for (int n = 1; n <= 7; ++n)
+        if (!CheckNodeOnline(static_cast<uint8_t>(n))) allNodesOnline = false;
     return allNodesOnline;
 }
 void DummyRobot::OnlineCheckTick(uint32_t) { /* 查询由通信工作线程负责，RGB 线程不等待 CAN。 */ }

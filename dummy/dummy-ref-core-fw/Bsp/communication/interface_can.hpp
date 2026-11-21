@@ -2,7 +2,7 @@
 //  interface_can.hpp —— CAN 通道（CAN1/CAN2）公共接口
 // ----------------------------------------------------------------------------
 //  - 暴露 CAN_context 结构、CanSendMessage、get_can_ctx、信号量句柄等
-//  - 实现细节见 interface_can.cpp（含本轮修复的 tx_error / 100ms 超时等）
+//  - 实现细节见 interface_can.cpp（含发送错误统计和明确的超时换算）
 // ============================================================================
 #ifndef __INTERFACE_CAN_HPP
 #define __INTERFACE_CAN_HPP
@@ -15,6 +15,17 @@
 // 心跳信号量、回调统计计数等运行期状态。
 struct CAN_context
 {
+    // CAN1 发送链路诊断，供 #STATUS 定位发送失败和节点未回应。
+    volatile uint32_t tx_attempt_cnt = 0;
+    volatile uint32_t tx_semaphore_timeout_cnt = 0;
+    volatile uint32_t tx_add_fail_cnt = 0;
+    volatile uint32_t tx_policy_reject_cnt = 0;
+    volatile uint32_t tx_complete_cnt = 0;
+    volatile uint32_t tx_abort_cnt = 0;
+    volatile uint32_t tx_error_cnt = 0;
+    volatile uint32_t tx_last_error_code = 0;
+    volatile uint8_t tx_last_node_id = 0;
+    volatile uint8_t tx_last_command = 0;
     CAN_HandleTypeDef* handle = nullptr;     // HAL CAN 句柄（CAN1 或 CAN2）
     uint8_t node_id = 0;                     // 本机在该总线上的节点 ID（0 = 广播）
     uint64_t serial_number = 0;              // 用于动态分配 node_id 的板序列号
@@ -47,6 +58,9 @@ struct CAN_context
     uint32_t unhandled_messages = 0;             // 收到了但无人处理的消息
 };
 
+extern CAN_context can1Ctx;
+extern CAN_context can2Ctx;
+
 // 由 HAL CAN 句柄反查上下文（CAN1 → ctx[0]、CAN2 → ctx[1]）。
 struct CAN_context* get_can_ctx(CAN_HandleTypeDef* hcan);
 
@@ -54,7 +68,7 @@ struct CAN_context* get_can_ctx(CAN_HandleTypeDef* hcan);
 // 由 communication.cpp 的 CommunicationTask 在 publish 完毕后依次调用。
 bool StartCanServer(CAN_TypeDef* hcan);
 
-// 标准 8 字节 CAN 帧发送。带 100 ms 信号量超时，超时静默放弃。
+// 标准 8 字节 CAN 帧发送。带明确的信号量超时，超时静默放弃。
 // txHeader.StdId 由调用方设好，本函数仅负责 TX 邮箱占用与超时管理。
 bool CanSendMessage(CAN_context* canCtx, uint8_t* txData, CAN_TxHeaderTypeDef* txHeader);
 

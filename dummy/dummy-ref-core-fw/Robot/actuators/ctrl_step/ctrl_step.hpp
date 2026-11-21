@@ -15,6 +15,7 @@
 class CtrlStepMotor
 {
 public:
+    bool QueryOnlineChecked();
     enum State
     {
         RUNNING,
