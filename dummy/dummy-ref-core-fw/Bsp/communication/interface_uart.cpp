@@ -228,7 +228,8 @@ static void UartServerTask(void* ctx)
 
 const osThreadAttr_t uartServerTask_attributes = {
     .name = "UartServerTask",
-    .stack_size = 2000,
+    // UART 与 USB 共用运动解析路径，同步保留完整调用链的栈余量。
+    .stack_size = 3072,
     .priority = (osPriority_t) osPriorityNormal,
 };
 

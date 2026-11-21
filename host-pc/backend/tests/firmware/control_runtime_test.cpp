@@ -1,4 +1,5 @@
 #include "common_inc.h"
+#include "motion_parser.hpp"
 #include <deque>
 #include <vector>
 #include <string>
@@ -159,6 +160,29 @@ static void Reset()
 int main()
 {
     try {
+        // 保留六轴、省略速度和科学计数法；拒绝截断、非有限值与多余字段。
+        float parsedJoints[6] = {};
+        float parsedSpeed = 5;
+        Require(MotionParser::Parse("&+1.5,-2.5,9e1,0,0,0", parsedJoints, parsedSpeed) &&
+                parsedJoints[0] == 1.5f && parsedJoints[1] == -2.5f &&
+                parsedJoints[2] == 90 && parsedSpeed == 5, "parse_six_axes_with_default_speed");
+        Require(MotionParser::Parse("@1,2,3,4,5,6,2e0", parsedJoints, parsedSpeed) &&
+                parsedSpeed == 2, "parse_cartesian_explicit_speed");
+        Require(MotionParser::Parse(">1,2,3,4,5,6,100", parsedJoints, parsedSpeed),
+                "parse_tuning_speed_boundary");
+        for (const char* command : {
+            "&", "&1,2,3,4,5", "&1,,3,4,5,6", "&nan,2,3,4,5,6",
+            "&inf,2,3,4,5,6", "&1e99,2,3,4,5,6", "&1,2,3,4,5,6,",
+            "&1,2,3,4,5,6,0", "&1,2,3,4,5,6,-1", "&1,2,3,4,5,6,101",
+            "&1,2,3,4,5,6,2junk", "&1,2,3,4,5,6,2,3", "!1,2,3,4,5,6"
+        }) Require(!MotionParser::Parse(command, parsedJoints, parsedSpeed), "invalid_motion_syntax");
+        float percent = 0;
+        Require(MotionParser::ParsePercent("0", percent) && percent == 0 &&
+                MotionParser::ParsePercent("100", percent) && percent == 100,
+                "hand_percent_boundaries");
+        Require(!MotionParser::ParsePercent("50junk", percent) &&
+                !MotionParser::ParsePercent("nan", percent) &&
+                !MotionParser::ParsePercent("101", percent), "invalid_hand_percent");
         InitAsciiCommands();
         EmergencyStopScanner scanner;
         auto scan = [&](const std::string& text) {
@@ -467,6 +491,23 @@ int main()
             dummy.commandHandler.ClearFifo();
         }
         __set_PRIMASK(0);
+
+        // 绕过协议入口的目标替换也必须完整校验，不能截取前六项后误受理。
+        Reset();
+        dummy.SetCommandMode(2);
+        dummy.taskActive = true;
+        const float previousTarget = dummy.targetJoints.a[0];
+        for (const char* command : {
+            "&5,0,90,0,0,0,2junk", "&5,0,90,0,0,0,0",
+            "&5,0,90,0,0,0,101", "&5,0,90,0,0,0,2,3",
+            "&5,0,90,0,0,0,", "&5,0,90,0,0,0,nan"
+        }) {
+            Require(dummy.commandHandler.Push(command) == 0xfb, "invalid_replacement_rejected");
+            Require(dummy.targetJoints.a[0] == previousTarget &&
+                    dummy.commandHandler.GetSpace() == 16 && __get_PRIMASK() == 0,
+                    "invalid_replacement_has_no_side_effect");
+        }
+        dummy.taskActive = false;
 
         Reset();
         Require(dummy.Homing(), "prepare_target_replacement_motion");

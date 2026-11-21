@@ -2,6 +2,7 @@
 #include "runtime_failure.hpp"
 #include "ascii_processor.hpp"
 #include "fixed_format.hpp"
+#include "motion_parser.hpp"
 #include <cctype>
 #include <cmath>
 #include <cstring>
@@ -95,21 +96,9 @@ int Tokens(char* text, char* tokens[], int maximum)
 bool ValidAction(const char* command)
 {
     if (strchr("&@>", command[0])) {
-        char text[128];
-        strcpy(text, command + 1);
-        char* position = text;
-        float values[7];
-        int count = 0;
-        for (;;) {
-            if (count >= 7) return false;
-            char* comma = strchr(position, ',');
-            if (comma) *comma = 0;
-            if (!Number(position, values[count++])) return false;
-            if (!comma) break;
-            position = comma + 1;
-        }
-        if (count != 6 && count != 7) return false;
-        if (count == 7 && (values[6] <= 0 || values[6] > 100)) return false;
+        float values[6] = {};
+        float speed = dummy.GetJointSpeed();
+        if (!MotionParser::Parse(command, values, speed)) return false;
         if (command[0] != '@') {
             for (int n = 1; n <= 6; ++n)
                 if (values[n - 1] < dummy.motorJ[n]->angleLimitMin || values[n - 1] > dummy.motorJ[n]->angleLimitMax) return false;

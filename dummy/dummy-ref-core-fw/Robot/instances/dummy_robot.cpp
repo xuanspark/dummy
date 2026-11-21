@@ -2,6 +2,7 @@
 #include "dummy_robot.h"
 #include "eeprom_interface.h"
 #include "fixed_format.hpp"
+#include "motion_parser.hpp"
 #include <cmath>
 #include <cstring>
 
@@ -465,8 +466,7 @@ bool DummyRobot::RunHand(const char* command, bool ensureHomed)
     const bool closing = strcmp(command, "!HD_C") == 0;
     const bool positionMode = strncmp(command, "!HD_POS ", 8) == 0;
     if (!opening && !closing && !positionMode) return false;
-    if (positionMode && (sscanf(command + 8, "%f", &percent) != 1 ||
-        !std::isfinite(percent) || percent < 0 || percent > 100)) return false;
+    if (positionMode && !MotionParser::ParsePercent(command + 8, percent)) return false;
     uint32_t seenStop = stopEpoch;
     uint32_t sequence = hand2->angleSequence;
     uint32_t activeTime = 0;
@@ -524,9 +524,9 @@ uint32_t DummyRobot::CommandHandler::Push(const char* command, uint8_t channel, 
     message.request = request;
     // 浮点解析放在临界区外，避免阻塞 USB、CAN 与急停中断。
     float values[6] = {};
-    const bool hasJointTarget = command[0] == '&' &&
-        sscanf(command + 1, "%f,%f,%f,%f,%f,%f", values, values + 1, values + 2,
-               values + 3, values + 4, values + 5) == 6;
+    float speed = context->GetJointSpeed();
+    const bool hasJointTarget = command[0] == '&' && MotionParser::Parse(command, values, speed);
+    if (command[0] == '&' && !hasJointTarget) return 0xfb;
     uint32_t mask = __get_PRIMASK();
     __disable_irq();
     if (context->maintenanceActive || context->robotState != STATE_NORMAL || context->pauseRequested) {
@@ -605,12 +605,8 @@ uint32_t DummyRobot::CommandHandler::ParseCommand(const char* command)
         ok = context->RunHand(command);
     } else {
         float values[6] = {}, speed = context->GetJointSpeed();
-        char extra;
-        int count = sscanf(command + 1, "%f,%f,%f,%f,%f,%f,%f%c", values, values + 1,
-                           values + 2, values + 3, values + 4, values + 5, &speed, &extra);
-        bool valid = count == 6 || count == 7;
-        for (float value : values) if (!std::isfinite(value)) valid = false;
-        if (valid && std::isfinite(speed) && speed > 0 && speed <= 100 && context->EnsureHomed() && context->WaitReady()) {
+        const bool valid = MotionParser::Parse(command, values, speed);
+        if (valid && context->EnsureHomed() && context->WaitReady()) {
             context->SetJointSpeed(speed);
             bool targetOk = command[0] == '@' ? context->MoveL(values[0], values[1], values[2], values[3], values[4], values[5]) :
                 context->MoveJ(values[0], values[1], values[2], values[3], values[4], values[5]);

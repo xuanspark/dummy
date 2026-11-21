@@ -225,7 +225,8 @@ void usb_rx_process_packet(uint8_t *buf, uint32_t len, uint8_t endpoint_pair)
 
 const osThreadAttr_t usbServerTask_attributes = {
     .name = "UsbServerTask",
-    .stack_size = 2000,
+    // 接收包、组行、事务解析及浮点转换共享调用栈，保留中断上下文余量。
+    .stack_size = 3072,
     .priority = (osPriority_t) osPriorityNormal,
 };
 
