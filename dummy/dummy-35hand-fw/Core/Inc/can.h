@@ -43,10 +43,11 @@ extern CAN_HandleTypeDef hcan;
 
 /* USER CODE END Private defines */
 
-void MX_CAN_Init(void);
+HAL_StatusTypeDef MX_CAN_Init(void);
 
 /* USER CODE BEGIN Prototypes */
-void CAN_Send(CAN_TxHeaderTypeDef* pHeader, uint8_t* data);
+HAL_StatusTypeDef CAN_Send(CAN_TxHeaderTypeDef* pHeader, uint8_t* data);
+void CAN_Service(void);
 
 /* USER CODE END Prototypes */
 

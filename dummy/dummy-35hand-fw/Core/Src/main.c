@@ -94,7 +94,10 @@ int main(void)
   MX_DMA_Init();
   MX_ADC1_Init();
   MX_USART1_UART_Init();
-  MX_CAN_Init();
+  if (MX_CAN_Init() != HAL_OK)
+  {
+    Error_Handler();
+  }
   MX_SPI1_Init();
   MX_TIM2_Init();
   MX_TIM3_Init();

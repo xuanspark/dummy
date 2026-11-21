@@ -10,6 +10,7 @@
 //  - EEPROM 优先则：EEPROM > Motor.h 默认值
 // ============================================================================
 #include "common_inc.h"
+#include <can.h>
 #include "configurations.h"
 #include "Platform/Utils/st_hardware.h"
 #include <tim.h>
@@ -123,6 +124,8 @@ void Main()
 
     for (;;)
     {
+        CAN_Service();
+
         // 主循环：编码器校准轮询 + EEPROM 提交 / 恢复检查
 //        if ( encoderCalibrator.FlashRun() == 0)
             encoderCalibrator.TickMainLoop();
