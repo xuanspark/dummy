@@ -621,7 +621,7 @@ class TestTagCoverage:
     """Make sure every command we now have a typed method for is in COMMAND_TAGS."""
 
     @pytest.mark.parametrize("cmd", [
-        "!START", "!STOP", "!CLOSE", "!HOME", "!RESET", "!PAUSE", "!RESUME",
+        "!START", "!TEACH_ON", "!TEACH_OFF", "!STOP", "!CLOSE", "!HOME", "!RESET", "!PAUSE", "!RESUME",
         "!CALIBRATION",
         "!HD_O", "!HD_C", "!HD_EN", "!HD_DIS", "!HD_ZERO", "!HD_POS 0", "!HD_I 1",
         "!RGB_ON", "!RGB_OFF", "!RGB_MODE 0", "!RGB_CUSTOM 1 2 3",

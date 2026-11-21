@@ -132,6 +132,18 @@ async def start(r: Robot = Depends(get_robot)):
     return {"ok": True}
 
 
+@router.post("/teach/on")
+async def teach_on(r: Robot = Depends(get_robot)):
+    await _run(r.teach_on())
+    return {"ok": True, "state": r.state.motion_state}
+
+
+@router.post("/teach/off")
+async def teach_off(r: Robot = Depends(get_robot)):
+    await _run(r.teach_off())
+    return {"ok": True, "state": r.state.motion_state}
+
+
 @router.post("/close")
 async def close(r: Robot = Depends(get_robot)):
     await _run(r.shutdown_robot())

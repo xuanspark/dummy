@@ -281,6 +281,29 @@ int main()
         Require(dummy.IsEnabled() && !dummy.hand2->isEnabled(), "hand_disable_command");
         Send("!HD_EN"); RunOne();
         Require(dummy.IsEnabled() && dummy.hand2->isEnabled(), "hand_enable_command");
+
+        Reset();
+        Require(dummy.Homing(), "teach_requires_known_home");
+        Send("!TEACH_ON"); RunOne();
+        Require(dummy.robotState == DummyRobot::STATE_TEACHING && !dummy.IsEnabled() &&
+                !dummy.hand2->isEnabled() && usb.text.find("TeachOn OK STATE:TEACHING") != std::string::npos,
+                "teach_enters_disabled_feedback_state");
+        usb.text.clear();
+        Send("#GETJPOS"); ProcessAsciiCommand(0);
+        Require(usb.text.find("GetJPos OK") != std::string::npos, "teach_reads_fresh_joint_position");
+        usb.text.clear();
+        Send("&10,0,90,0,0,0,10");
+        Require(usb.text.find("state=TEACHING") != std::string::npos, "teach_blocks_motion");
+        usb.text.clear();
+        Send("!PAUSE");
+        Require(usb.text.find("Pause Error: state=TEACHING") != std::string::npos, "teach_blocks_pause");
+        Send("!STOP"); Send("!RESUME");
+        Require(dummy.robotState == DummyRobot::STATE_TEACHING && !dummy.IsEnabled(), "teach_stop_resume_keeps_teach_state");
+        Send("!TEACH_OFF"); RunOne();
+        Require(dummy.robotState == DummyRobot::STATE_NORMAL && dummy.IsEnabled() &&
+                dummy.hand2->isEnabled() && usb.text.find("TeachOff OK STATE:NORMAL") != std::string::npos,
+                "teach_exit_syncs_and_reenables");
+
         Send("#SETPID 7 101 202 303 404"); ProcessAsciiCommand(0);
         Require(usb.text.find("SetPid OK") != std::string::npos && gains[7][0] == 101 && gains[7][1] == 404 && gains[7][2] == 202 && gains[7][3] == 303, "pidv_all_order_and_hand");
         Send("#SETLIMIT 5 12 8 1.2"); ProcessAsciiCommand(0);

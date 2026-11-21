@@ -36,7 +36,8 @@ const char* Tag(const char* command)
     if (strchr("&@>", command[0])) return "Move";
     struct Entry { const char* command; const char* tag; };
     static const Entry entries[] = {
-        {"!START", "Started"}, {"!HOME", "Home"}, {"!RESET", "Reset"}, {"!CLOSE", "Close"},
+        {"!START", "Started"}, {"!TEACH_ON", "TeachOn"}, {"!TEACH_OFF", "TeachOff"},
+        {"!HOME", "Home"}, {"!RESET", "Reset"}, {"!CLOSE", "Close"},
         {"!HD_O", "HD_O"}, {"!HD_C", "HD_C"}, {"!HD_POS", "HD_POS"}, {"!HD_ZERO", "HD_ZERO"},
         {"!HD_EN", "HD_EN"}, {"!HD_DIS", "HD_DIS"}, {"!HD_I", "HD_I"},
         {"!RGB_ON", "RGB_ON"}, {"!RGB_OFF", "RGB_OFF"}, {"!RGB_MODE", "RGB_MODE"}, {"!RGB_CUSTOM", "RGB_CUSTOM"},
@@ -59,7 +60,8 @@ bool Query(const char* command)
 }
 bool Action(const char* command)
 {
-    return strchr("&@>", command[0]) || Is(command, "!START") || Is(command, "!HOME") ||
+    return strchr("&@>", command[0]) || Is(command, "!START") ||
+        Is(command, "!TEACH_ON") || Is(command, "!TEACH_OFF") || Is(command, "!HOME") ||
         Is(command, "!RESET") || Is(command, "!CLOSE") || Is(command, "!HD_O") ||
         Is(command, "!HD_C") || Is(command, "!HD_POS") || Is(command, "!HD_ZERO") ||
         Is(command, "!HD_EN") || Is(command, "!HD_DIS") || Is(command, "!CALIBRATION");
@@ -592,7 +594,9 @@ void Receive(const char* input, size_t length, StreamSink& baseOutput)
         Respond(output, "Resume OK FROM:%s STATE:%s", previous, dummy.StateName()); return;
     }
     const char* tag = Tag(command);
-    if (!Query(command) && dummy.robotState != DummyRobot::STATE_NORMAL) {
+    const bool teachExit = !strcmp(command, "!TEACH_OFF");
+    if (!Query(command) && dummy.robotState != DummyRobot::STATE_NORMAL &&
+        !(teachExit && dummy.robotState == DummyRobot::STATE_TEACHING)) {
         Respond(output, "%s Error: state=%s", tag, dummy.StateName()); return;
     }
     message.channel = output.channelType;

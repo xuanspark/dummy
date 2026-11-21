@@ -11,6 +11,7 @@ export default defineComponent({
         case 'NORMAL': return '正常'
         case 'PAUSED': return '暂停'
         case 'EMERGENCY_STOP': return '急停'
+        case 'TEACHING': return '示教'
         default: return state
       }
     }

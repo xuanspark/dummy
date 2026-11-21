@@ -130,6 +130,8 @@ class TestExpectedTag:
     def test_simple(self):
         assert P.expected_tag("!HOME") == "Home"
         assert P.expected_tag("!CLOSE") == "Close"
+        assert P.expected_tag("!TEACH_ON") == "TeachOn"
+        assert P.expected_tag("!TEACH_OFF") == "TeachOff"
 
     def test_with_args(self):
         assert P.expected_tag("!HD_POS 50") == "HD_POS"

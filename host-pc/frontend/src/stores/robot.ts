@@ -23,7 +23,7 @@ export const useRobotStore = defineStore('robot', () => {
   const speed = ref<number | null>(null)
   const logs = ref<LogEntry[]>([])
   const dryRun = ref<boolean>(localStorage.getItem(DRY_RUN_KEY) === '1')
-  const robotState = ref<'unknown' | 'normal' | 'estop' | 'paused' | 'stopped'>('unknown')
+  const robotState = ref<'unknown' | 'normal' | 'estop' | 'paused' | 'teaching' | 'stopped'>('unknown')
   const motionLimits = ref<MotionLimits>({})
   const limitsReady = ref(false)
   const limitWarning = ref('')
@@ -34,6 +34,7 @@ export const useRobotStore = defineStore('robot', () => {
       case 'normal': return '正常'
       case 'estop': return '急停'
       case 'paused': return '暂停'
+      case 'teaching': return '示教'
       case 'stopped': return '已关闭'
       default: return '未知'
     }
@@ -59,6 +60,7 @@ export const useRobotStore = defineStore('robot', () => {
   function applyMotionState(state: string) {
     if (state === 'EMERGENCY_STOP') robotState.value = 'estop'
     else if (state === 'PAUSED') robotState.value = 'paused'
+    else if (state === 'TEACHING') robotState.value = 'teaching'
     else if (state === 'NORMAL') robotState.value = 'normal'
   }
 

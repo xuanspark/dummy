@@ -41,7 +41,7 @@ public:
     volatile bool isStalled = false;
 
     void SetAngle(float _angle);
-    void SetAngleWithVelocityLimit(float _angle, float _vel);
+    bool SetAngleWithVelocityLimit(float _angle, float _vel);
     // CAN Command
     bool SetEnable(bool _enable);
     void SetEnableTemp(bool _enable);
@@ -49,7 +49,7 @@ public:
     void SetCurrentSetPoint(float _val);
     void SetVelocitySetPoint(float _val);
     void SetPositionSetPoint(float _val);
-    void SetPositionWithVelocityLimit(float _pos, float _vel);
+    bool SetPositionWithVelocityLimit(float _pos, float _vel);
     void SetNodeID(uint32_t _id);
     bool SetCurrentLimit(float _val);
     bool SetVelocityLimit(float _val);

@@ -34,7 +34,7 @@ void CtrlStepMotor::DoCalibration() { Send(0x02); }
 void CtrlStepMotor::SetCurrentSetPoint(float v) { state = RUNNING; Send(0x03, &v); }
 void CtrlStepMotor::SetVelocitySetPoint(float v) { state = RUNNING; Send(0x04, &v); }
 void CtrlStepMotor::SetPositionSetPoint(float v) { Send(0x05, &v, 1); }
-void CtrlStepMotor::SetPositionWithVelocityLimit(float position, float velocity)
+bool CtrlStepMotor::SetPositionWithVelocityLimit(float position, float velocity)
 {
     uint8_t data[8];
     std::memcpy(data, &position, 4);
@@ -44,7 +44,7 @@ void CtrlStepMotor::SetPositionWithVelocityLimit(float position, float velocity)
     header.IDE = CAN_ID_STD;
     header.RTR = CAN_RTR_DATA;
     header.DLC = 8;
-    CanSendMessage(get_can_ctx(hcan), data, &header);
+    return CanSendMessage(get_can_ctx(hcan), data, &header);
 }
 void CtrlStepMotor::SetNodeID(uint32_t v) { Send(0x11, &v, 1); }
 bool CtrlStepMotor::SetCurrentLimit(float v) { return Send(0x12, &v, 1); }
@@ -89,9 +89,9 @@ void CtrlStepMotor::SetAngle(float value)
 {
     SetPositionSetPoint((inverseDirection ? -value : value) / 360.0f * reduction);
 }
-void CtrlStepMotor::SetAngleWithVelocityLimit(float value, float velocity)
+bool CtrlStepMotor::SetAngleWithVelocityLimit(float value, float velocity)
 {
-    SetPositionWithVelocityLimit((inverseDirection ? -value : value) / 360.0f * reduction, velocity);
+    return SetPositionWithVelocityLimit((inverseDirection ? -value : value) / 360.0f * reduction, velocity);
 }
 void CtrlStepMotor::UpdateAngle() { Send(0x23); }
 void CtrlStepMotor::UpdateAngleCallback(float position, bool finished, bool stalled)

@@ -9,9 +9,9 @@ from dataclasses import dataclass
 from typing import Any
 
 
-HARDWARE_INTERFACE_VERSION = "1.0"
-FIRMWARE_BASELINE_VERSION = "1.2.29"
-FIRMWARE_CANDIDATE_VERSION = "1.2.30"
+HARDWARE_INTERFACE_VERSION = "1.1"
+FIRMWARE_BASELINE_VERSION = "1.2.30"
+FIRMWARE_CANDIDATE_VERSION = "1.3.0"
 
 
 @dataclass(frozen=True)
@@ -39,7 +39,7 @@ class HardwareInterface:
                 "gripper": {"id": 7, "bus": "CAN1", "role": "手爪电机"},
             },
             "commands": {
-                "lifecycle": ["!START", "!HOME", "!STOP", "!PAUSE", "!RESUME", "!CLOSE"],
+                "lifecycle": ["!START", "!HOME", "!STOP", "!PAUSE", "!RESUME", "!CLOSE", "!TEACH_ON", "!TEACH_OFF"],
                 "motion": ["&j1,j2,j3,j4,j5,j6[,speed]", "@x,y,z,a,b,c[,speed]"],
                 "gripper": ["!HD_O", "!HD_C", "!HD_EN", "!HD_DIS", "!HD_POS percent"],
                 "diagnostics": ["#STATUS", "#ONLINE [node]", "#GETJPOS", "#GETLPOS"],
@@ -61,6 +61,7 @@ class HardwareInterface:
                 "unknown_capability": "上位机必须忽略未知能力并保持已知命令可用",
                 "version_rule": "先读取接口描述，再决定是否显示可选功能",
                 "gripper_angle_semantics": "手爪百分比命令由固件映射到手爪角度，界面不直接写入角度",
+                "teaching": "!TEACH_ON 进入失能示教并保留位置反馈；!TEACH_OFF 读取当前位置后同步使能",
             },
             "validation": {
                 "verified": [

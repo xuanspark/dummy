@@ -63,6 +63,7 @@ public:
         _AUTO_COMPLETE      = 102,  // 绿色慢闪（短周期呼吸）
         _AUTO_ESTOP         = 103,  // 红色线性快闪
         _AUTO_PAUSED        = 104,  // 黄色流水灯（彩虹变体）
+        _AUTO_TEACHING      = 105,  // 蓝色慢闪
     };
 
     // 自动模式的子状态标识
@@ -73,6 +74,7 @@ public:
         AUTO_COMPLETE = 3,  // 完成
         AUTO_ESTOP    = 4,  // 急停
         AUTO_PAUSED   = 5,  // 暂停
+        AUTO_TEACHING  = 6,  // 示教
     };
 
     volatile AutoSubState autoSubState = AUTO_STANDBY;

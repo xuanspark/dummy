@@ -249,6 +249,8 @@ def cmd_rgb_custom(r: int, g: int, b: int) -> str:
 # wait for after sending a command.
 COMMAND_TAGS: dict[str, str] = {
     "!START":         "Started",
+    "!TEACH_ON":      "TeachOn",
+    "!TEACH_OFF":     "TeachOff",
     "!STOP":          "Stop",
     "!CLOSE":         "Close",
     "!HOME":          "Home",

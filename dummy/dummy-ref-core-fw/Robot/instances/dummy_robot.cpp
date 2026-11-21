@@ -50,6 +50,7 @@ const char* DummyRobot::StateName() const
     switch (robotState) {
         case STATE_EMERGENCY_STOP: return "EMERGENCY_STOP";
         case STATE_PAUSED: return "PAUSED";
+        case STATE_TEACHING: return "TEACHING";
         default: return "NORMAL";
     }
 }
@@ -125,7 +126,9 @@ bool DummyRobot::CanTransmit(uint8_t command, const uint8_t* data) const
     if (command == 0x01) {
         uint32_t enabled;
         std::memcpy(&enabled, data, sizeof(enabled));
-        return robotState == STATE_NORMAL && (enabled != 0 || disableAuthorized || handDisableAuthorized);
+        const bool teachEnable = robotState == STATE_TEACHING && enabled != 0 && taskActive;
+        return (robotState == STATE_NORMAL && (enabled != 0 || disableAuthorized || handDisableAuthorized)) ||
+            teachEnable || (robotState == STATE_TEACHING && enabled == 0 && disableAuthorized);
     }
     // 暂停允许当前任务的内部动作自然完成；入口拒绝所有新业务。
     return robotState == STATE_NORMAL || taskActive;
@@ -167,7 +170,8 @@ bool DummyRobot::CommandHandler::Pause()
 {
     uint32_t mask = __get_PRIMASK();
     __disable_irq();
-    bool accepted = context->robotState != STATE_EMERGENCY_STOP;
+    bool accepted = context->robotState != STATE_EMERGENCY_STOP &&
+        context->robotState != STATE_TEACHING;
     if (accepted) {
         if (context->robotState == STATE_PAUSED) {
             accepted = false;
@@ -188,23 +192,27 @@ void DummyRobot::CommandHandler::Resume()
     uint32_t mask = __get_PRIMASK();
     __disable_irq();
     context->pauseRequested = false;
-    context->robotState = STATE_NORMAL;
+    context->robotState = context->teachMode ? STATE_TEACHING : STATE_NORMAL;
     context->emergencyHoldActive = false;
     context->emergencyBrakeEpoch = 0xffffffffu;
     __set_PRIMASK(mask);
-    context->SetRGBAutoSubState(context->taskActive ? RGB::AUTO_WORKING : RGB::AUTO_STANDBY);
+    context->SetRGBAutoSubState(context->teachMode ? RGB::AUTO_TEACHING :
+        (context->taskActive ? RGB::AUTO_WORKING : RGB::AUTO_STANDBY));
 }
 
 bool DummyRobot::WaitReady()
 {
-    while (robotState == STATE_EMERGENCY_STOP || (robotState == STATE_PAUSED && !taskActive)) osDelay(5);
+    while (robotState == STATE_EMERGENCY_STOP || robotState == STATE_TEACHING ||
+           (robotState == STATE_PAUSED && !taskActive)) osDelay(5);
     return IsEnabled();
 }
 bool DummyRobot::SetEnable(bool enabled)
 {
     uint32_t mask = __get_PRIMASK();
     __disable_irq();
-    if (robotState != STATE_NORMAL || (!enabled && !disableAuthorized)) {
+    const bool stateAllowsEnable = robotState == STATE_NORMAL ||
+        (robotState == STATE_TEACHING && (enabled || disableAuthorized));
+    if (!stateAllowsEnable || (!enabled && !disableAuthorized)) {
         __set_PRIMASK(mask);
         return false;
     }
@@ -215,7 +223,9 @@ bool DummyRobot::SetEnable(bool enabled)
     bool sent = motorJ[ALL]->SetEnable(enabled);
     mask = __get_PRIMASK();
     __disable_irq();
-    bool accepted = sent && epoch == stopEpoch && robotState == STATE_NORMAL;
+    const bool stateStillAllowsEnable = robotState == STATE_NORMAL ||
+        (robotState == STATE_TEACHING && (enabled || disableAuthorized));
+    bool accepted = sent && epoch == stopEpoch && stateStillAllowsEnable;
     if (accepted) {
         isEnabled = enabled;
         hand2->enabledFlag = enabled;
@@ -240,6 +250,102 @@ bool DummyRobot::Disable()
     bool disabled = SetEnable(false);
     disableAuthorized = false;
     return disabled && !isEnabled;
+}
+
+bool DummyRobot::EnterTeach()
+{
+    if (robotState != STATE_NORMAL || !isEnabled || armMotionActive || scheduledActions != 1)
+        return false;
+
+    UpdateJointAngles();
+    hand2->UpdateAngle();
+    osDelay(30);
+    UpdateJointAnglesCallback();
+
+    for (int n = 1; n <= 6; ++n) {
+        auto* motor = motorJ[n];
+        if (motor->angleSequence == 0 || HAL_GetTick() - motor->lastAngleTick > 250 ||
+            !std::isfinite(currentJoints.a[n - 1]) || motor->state != CtrlStepMotor::FINISH ||
+            currentJoints.a[n - 1] < motor->angleLimitMin || currentJoints.a[n - 1] > motor->angleLimitMax) {
+            motionFault.reason = "teach_feedback_not_ready";
+            motionFault.node = static_cast<uint32_t>(n);
+            return false;
+        }
+    }
+    if (hand2->angleSequence == 0 || HAL_GetTick() - hand2->lastAngleTick > 250 ||
+        !std::isfinite(hand2->angle) || hand2->state != CtrlStepMotor::FINISH) {
+        motionFault.reason = "teach_hand_feedback_not_ready";
+        motionFault.node = 7;
+        return false;
+    }
+
+    disableAuthorized = true;
+    const bool disabled = SetEnable(false);
+    disableAuthorized = false;
+    if (!disabled || isEnabled) {
+        motionFault.reason = "teach_disable_failed";
+        return false;
+    }
+
+    uint32_t mask = __get_PRIMASK();
+    __disable_irq();
+    pauseRequested = false;
+    teachMode = true;
+    robotState = STATE_TEACHING;
+    __set_PRIMASK(mask);
+    SetRGBAutoSubState(RGB::AUTO_TEACHING);
+    return true;
+}
+
+bool DummyRobot::ExitTeach()
+{
+    if (robotState != STATE_TEACHING || !teachMode || isEnabled)
+        return false;
+
+    UpdateJointAngles();
+    hand2->UpdateAngle();
+    osDelay(30);
+    UpdateJointAnglesCallback();
+    for (int n = 1; n <= 6; ++n) {
+        auto* motor = motorJ[n];
+        if (motor->angleSequence == 0 || HAL_GetTick() - motor->lastAngleTick > 250 ||
+            !std::isfinite(motor->angle) || !std::isfinite(currentJoints.a[n - 1]) ||
+            currentJoints.a[n - 1] < motor->angleLimitMin ||
+            currentJoints.a[n - 1] > motor->angleLimitMax) {
+            motionFault.reason = "teach_position_invalid";
+            motionFault.node = static_cast<uint32_t>(n);
+            return false;
+        }
+    }
+    if (hand2->angleSequence == 0 || HAL_GetTick() - hand2->lastAngleTick > 250 ||
+        !std::isfinite(hand2->angle)) {
+        motionFault.reason = "teach_hand_position_invalid";
+        motionFault.node = 7;
+        return false;
+    }
+
+    if (!SetEnable(true)) {
+        motionFault.reason = "teach_enable_failed";
+        return false;
+    }
+    bool synchronized = true;
+    for (int n = 1; n <= 6; ++n)
+        synchronized = motorJ[n]->SetAngleWithVelocityLimit(motorJ[n]->angle, 1.0f) && synchronized;
+    synchronized = hand2->SetAngleWithVelocityLimit(hand2->angle, 1.0f) && synchronized;
+    if (!synchronized) {
+        disableAuthorized = true;
+        SetEnable(false);
+        disableAuthorized = false;
+        motionFault.reason = "teach_sync_failed";
+        return false;
+    }
+
+    targetJoints = currentJoints;
+    isHomed = true;
+    teachMode = false;
+    robotState = STATE_NORMAL;
+    SetRGBAutoSubState(RGB::AUTO_STANDBY);
+    return true;
 }
 bool DummyRobot::SetHandEnable(bool enabled)
 {
@@ -514,8 +620,10 @@ bool DummyRobot::RunHand(const char* command, bool ensureHomed)
 uint32_t DummyRobot::CommandHandler::Push(const char* command, uint8_t channel, uint32_t request)
 {
     if (!command) return 0xfb;
-    if (context->robotState != STATE_NORMAL || context->pauseRequested) return 0xfe;
-    if (strcmp(command, "!START") != 0 && !context->IsEnabled()) return 0xfd;
+    const bool teachExit = strcmp(command, "!TEACH_OFF") == 0;
+    if ((context->robotState != STATE_NORMAL &&
+         !(teachExit && context->robotState == STATE_TEACHING)) || context->pauseRequested) return 0xfe;
+    if (strcmp(command, "!START") != 0 && !teachExit && !context->IsEnabled()) return 0xfd;
     const size_t length = strnlen(command, sizeof(CommandMessage::text));
     if (length == 0 || length >= sizeof(CommandMessage::text)) return 0xfb;
     CommandMessage message{};
@@ -529,7 +637,9 @@ uint32_t DummyRobot::CommandHandler::Push(const char* command, uint8_t channel, 
     if (command[0] == '&' && !hasJointTarget) return 0xfb;
     uint32_t mask = __get_PRIMASK();
     __disable_irq();
-    if (context->maintenanceActive || context->robotState != STATE_NORMAL || context->pauseRequested) {
+    if (context->maintenanceActive ||
+        (context->robotState != STATE_NORMAL &&
+         !(teachExit && context->robotState == STATE_TEACHING)) || context->pauseRequested) {
         bool busy = context->maintenanceActive;
         __set_PRIMASK(mask);
         return busy ? 0xfc : 0xfe;
@@ -580,7 +690,9 @@ uint32_t DummyRobot::CommandHandler::ParseCommand(const char* command)
     for (;;) {
         uint32_t mask = __get_PRIMASK();
         __disable_irq();
-        bool ready = context->robotState == STATE_NORMAL;
+        const bool teachExit = strcmp(command, "!TEACH_OFF") == 0;
+        bool ready = context->robotState == STATE_NORMAL ||
+            (teachExit && context->robotState == STATE_TEACHING);
         if (ready) context->taskActive = true;
         __set_PRIMASK(mask);
         if (ready) break;
@@ -593,6 +705,8 @@ uint32_t DummyRobot::CommandHandler::ParseCommand(const char* command)
     bool ok = false;
     const char* tag = "Move";
     if (strcmp(command, "!START") == 0) { tag = "Started"; ok = context->Startup(); }
+    else if (strcmp(command, "!TEACH_ON") == 0) { tag = "TeachOn"; ok = context->EnterTeach(); }
+    else if (strcmp(command, "!TEACH_OFF") == 0) { tag = "TeachOff"; ok = context->ExitTeach(); }
     else if (strcmp(command, "!HOME") == 0) { tag = "Home"; ok = context->Homing(); }
     else if (strcmp(command, "!RESET") == 0) { tag = "Reset"; ok = context->Resting(); }
     else if (strcmp(command, "!CLOSE") == 0) { tag = "Close"; ok = context->Shutdown(); }
@@ -809,7 +923,9 @@ void DummyRobot::AutoModeIdleTick(uint32_t delta)
     // 优先级：急停 > 暂停 > 工作中 > 完成提示 > 待机。
     static RGB::AutoSubState previous = RGB::AUTO_STANDBY;
     RGB::AutoSubState desired = RGB::AUTO_STANDBY;
-    if (robotState == STATE_EMERGENCY_STOP)
+    if (robotState == STATE_TEACHING)
+        desired = RGB::AUTO_TEACHING;
+    else if (robotState == STATE_EMERGENCY_STOP)
         desired = RGB::AUTO_ESTOP;
     else if (robotState == STATE_PAUSED)
         desired = RGB::AUTO_PAUSED;

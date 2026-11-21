@@ -199,7 +199,7 @@ class Robot:
 
     def _update_motion_state(self, line: str) -> None:
         _, payload = P.unwrap_response(line)
-        match = re.search(r"\bSTATE[:=](NORMAL|PAUSED|EMERGENCY_STOP)\b", payload, re.I)
+        match = re.search(r"\bSTATE[:=](NORMAL|PAUSED|EMERGENCY_STOP|TEACHING)\b", payload, re.I)
         if match:
             state = match[1].upper()
             blocked = state in {"PAUSED", "EMERGENCY_STOP"}
@@ -229,7 +229,8 @@ class Robot:
         tag = P.expected_tag(command)
         sub = self._t.subscribe()
         lines: list[str] = []
-        action = command.startswith(("&", "@", ">", "!START", "!HOME", "!RESET", "!CLOSE", "!HD_O", "!HD_C", "!HD_POS"))
+        action = command.startswith(("&", "@", ">", "!START", "!TEACH_ON", "!TEACH_OFF",
+                                    "!HOME", "!RESET", "!CLOSE", "!HD_O", "!HD_C", "!HD_POS"))
         remaining = timeout
         queued = False
         executing = False
@@ -367,6 +368,12 @@ class Robot:
     # ---- public commands ----
     async def start_robot(self) -> None:
         await self._exec("!START", timeout=300.0)
+
+    async def teach_on(self) -> None:
+        await self._exec("!TEACH_ON", timeout=30.0)
+
+    async def teach_off(self) -> None:
+        await self._exec("!TEACH_OFF", timeout=30.0)
 
     async def shutdown_robot(self) -> None:
         await self._exec("!CLOSE", timeout=300.0)

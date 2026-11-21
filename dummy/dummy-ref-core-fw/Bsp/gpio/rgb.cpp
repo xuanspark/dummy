@@ -121,6 +121,9 @@ void RGB::Run(RGB::Rgb_style_t mode) {
                 case AUTO_PAUSED:
                     YellowFlow();                        // 黄色流水灯
                     break;
+                case AUTO_TEACHING:
+                    SlowFlash(0, 0, 100);                 // 蓝色慢闪
+                    break;
                 default:
                     BreathEffect(100, 100, 100, 120);
                     break;
@@ -141,6 +144,9 @@ void RGB::Run(RGB::Rgb_style_t mode) {
             break;
         case _AUTO_PAUSED:
             YellowFlow();
+            break;
+        case _AUTO_TEACHING:
+            SlowFlash(0, 0, 100);
             break;
         default:
             SolidColor(0, 0, 0);

@@ -84,6 +84,8 @@ export const api = {
 
   // ---------- robot lifecycle ----------
   start: () => http.post('/api/start', {}, { timeout: 0 }).then((r) => r.data),
+  teachOn: () => http.post<{ ok: boolean; state: string }>('/api/teach/on', {}, { timeout: 0 }).then((r) => r.data),
+  teachOff: () => http.post<{ ok: boolean; state: string }>('/api/teach/off', {}, { timeout: 0 }).then((r) => r.data),
   close: () => http.post('/api/close', {}, { timeout: 0 }).then((r) => r.data),
   home: () => http.post('/api/home', {}, { timeout: 0 }).then((r) => r.data),
   reset: () => http.post('/api/reset', {}, { timeout: 0 }).then((r) => r.data),

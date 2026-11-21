@@ -189,7 +189,8 @@ public:
     {
         STATE_NORMAL = 0,        // 正常运行
         STATE_EMERGENCY_STOP,    // 急停（全轴同步机械停止，保持使能，保留队列）
-        STATE_PAUSED             // 暂停（当前指令完成后等待，保持使能，保留队列）
+        STATE_PAUSED,            // 暂停（当前指令完成后等待，保持使能，保留队列）
+        STATE_TEACHING           // 示教（六轴失能，持续保留编码器反馈）
     };
 
     volatile RobotState robotState = STATE_NORMAL;
@@ -299,6 +300,8 @@ public:
     // !CLOSE：先回零点姿态 → 闭合手爪 → 然后失能机械臂+手爪。会重置 isHomed=false。
     bool Shutdown();
     bool Disable();
+    bool EnterTeach();
+    bool ExitTeach();
     bool SetHandEnable(bool enabled);
     bool EnsureHomed();
     bool WaitReady();
@@ -331,6 +334,7 @@ public:
     void OnHandActionRGBHook(bool _open);
     bool IsMoving();
     bool IsEnabled();
+    bool IsTeaching() const { return teachMode; }
     bool IsHomed() const { return isHomed; }
     bool IsPausePending() const { return pauseRequested; }
     void InvalidateHome() { isHomed = false; }
@@ -422,6 +426,7 @@ private:
     volatile bool disableAuthorized = false;
     volatile bool handDisableAuthorized = false;
     volatile bool enableTransitionActive = false;
+    volatile bool teachMode = false;
     volatile bool restoreEnablePending = false;
     volatile bool armMotionActive = false;
     volatile bool emergencyHoldActive = false;
