@@ -30,6 +30,11 @@ uint8_t TxData[8];
 uint8_t RxData[8];
 uint32_t TxMailbox;
 
+static volatile uint32_t canErrorCount;
+static volatile uint32_t canLastError;
+static volatile uint8_t canRecoveryPending;
+static uint32_t canLastRecoveryTick;
+
 /* USER CODE END 0 */
 
 CAN_HandleTypeDef hcan;
@@ -52,9 +57,9 @@ void MX_CAN_Init(void)
   hcan.Init.TimeSeg1 = CAN_BS1_5TQ;
   hcan.Init.TimeSeg2 = CAN_BS2_3TQ;
   hcan.Init.TimeTriggeredMode = DISABLE;
-  hcan.Init.AutoBusOff = DISABLE;
+  hcan.Init.AutoBusOff = ENABLE;
   hcan.Init.AutoWakeUp = ENABLE;
-  hcan.Init.AutoRetransmission = DISABLE;
+  hcan.Init.AutoRetransmission = ENABLE;
   hcan.Init.ReceiveFifoLocked = DISABLE;
   hcan.Init.TransmitFifoPriority = DISABLE;
   if (HAL_CAN_Init(&hcan) != HAL_OK)
@@ -80,18 +85,23 @@ void MX_CAN_Init(void)
         Error_Handler();
     }
 
-    HAL_CAN_Start(&hcan); //start CAN
+    if (HAL_CAN_Start(&hcan) != HAL_OK)
+    {
+        Error_Handler();
+    }
 
-    HAL_CAN_ActivateNotification(&hcan,
-                                 CAN_IT_TX_MAILBOX_EMPTY |
-                                 CAN_IT_RX_FIFO0_MSG_PENDING | CAN_IT_RX_FIFO1_MSG_PENDING |
-                                 /* we probably only want this */
-                                 CAN_IT_RX_FIFO0_FULL | CAN_IT_RX_FIFO1_FULL |
-                                 CAN_IT_RX_FIFO0_OVERRUN | CAN_IT_RX_FIFO1_OVERRUN |
-                                 CAN_IT_WAKEUP | CAN_IT_SLEEP_ACK |
-                                 CAN_IT_ERROR_WARNING | CAN_IT_ERROR_PASSIVE |
-                                 CAN_IT_BUSOFF | CAN_IT_LAST_ERROR_CODE |
-                                 CAN_IT_ERROR);
+    if (HAL_CAN_ActivateNotification(&hcan,
+                                     CAN_IT_TX_MAILBOX_EMPTY |
+                                     CAN_IT_RX_FIFO0_MSG_PENDING | CAN_IT_RX_FIFO1_MSG_PENDING |
+                                     CAN_IT_RX_FIFO0_FULL | CAN_IT_RX_FIFO1_FULL |
+                                     CAN_IT_RX_FIFO0_OVERRUN | CAN_IT_RX_FIFO1_OVERRUN |
+                                     CAN_IT_WAKEUP | CAN_IT_SLEEP_ACK |
+                                     CAN_IT_ERROR_WARNING | CAN_IT_ERROR_PASSIVE |
+                                     CAN_IT_BUSOFF | CAN_IT_LAST_ERROR_CODE |
+                                     CAN_IT_ERROR) != HAL_OK)
+    {
+        Error_Handler();
+    }
 
 /* Configure Transmission process */
     TxHeader.StdId = boardConfig.canNodeId;
@@ -178,12 +188,20 @@ void HAL_CAN_MspDeInit(CAN_HandleTypeDef* canHandle)
 }
 
 /* USER CODE BEGIN 1 */
-void CAN_Send(CAN_TxHeaderTypeDef* pHeader, uint8_t* data)
+HAL_StatusTypeDef CAN_Send(CAN_TxHeaderTypeDef* pHeader, uint8_t* data)
 {
-    if (HAL_CAN_AddTxMessage(&hcan, pHeader, data, &TxMailbox) != HAL_OK)
+    HAL_StatusTypeDef status = HAL_CAN_AddTxMessage(&hcan, pHeader, data, &TxMailbox);
+    if (status != HAL_OK)
     {
-        Error_Handler();
+        canErrorCount++;
+        canLastError = HAL_CAN_GetError(&hcan);
+        if (HAL_CAN_GetState(&hcan) == HAL_CAN_STATE_ERROR ||
+            (canLastError & (HAL_CAN_ERROR_BOF | HAL_CAN_ERROR_EPV)) != 0U)
+        {
+            canRecoveryPending = 1U;
+        }
     }
+    return status;
 }
 
 void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef* CanHandle)
@@ -191,8 +209,14 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef* CanHandle)
     /* Get RX message */
     if (HAL_CAN_GetRxMessage(CanHandle, CAN_RX_FIFO0, &RxHeader, RxData) != HAL_OK)
     {
-        /* Reception Error */
-        Error_Handler();
+        canErrorCount++;
+        canLastError = HAL_CAN_GetError(CanHandle);
+        if (HAL_CAN_GetState(CanHandle) == HAL_CAN_STATE_ERROR ||
+            (canLastError & (HAL_CAN_ERROR_BOF | HAL_CAN_ERROR_EPV)) != 0U)
+        {
+            canRecoveryPending = 1U;
+        }
+        return;
     }
 
     uint8_t id = (RxHeader.StdId >> 7); // 4Bits ID & 7Bits Msg
@@ -201,6 +225,37 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef* CanHandle)
     {
         OnCanCmd(cmd, RxData, RxHeader.DLC);
     }
+}
+
+void HAL_CAN_ErrorCallback(CAN_HandleTypeDef* CanHandle)
+{
+    if (CanHandle != &hcan)
+        return;
+
+    canErrorCount++;
+    canLastError = HAL_CAN_GetError(CanHandle);
+    if ((canLastError & (HAL_CAN_ERROR_BOF | HAL_CAN_ERROR_EPV)) != 0U)
+        canRecoveryPending = 1U;
+}
+
+void CAN_Service(void)
+{
+    if (!canRecoveryPending)
+        return;
+
+    const uint32_t now = HAL_GetTick();
+    if ((now - canLastRecoveryTick) < 100U)
+        return;
+    canLastRecoveryTick = now;
+
+    HAL_NVIC_DisableIRQ(USB_HP_CAN1_TX_IRQn);
+    HAL_NVIC_DisableIRQ(USB_LP_CAN1_RX0_IRQn);
+    HAL_NVIC_DisableIRQ(CAN1_RX1_IRQn);
+    HAL_NVIC_DisableIRQ(CAN1_SCE_IRQn);
+
+    (void)HAL_CAN_DeInit(&hcan);
+    MX_CAN_Init();
+    canRecoveryPending = 0U;
 }
 /* USER CODE END 1 */
 

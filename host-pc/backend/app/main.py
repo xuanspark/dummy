@@ -22,6 +22,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.api.connection import router as connection_router
+from app.api.hardware import router as hardware_router
 from app.api.robot import router as robot_router
 from app.api.ws import router as ws_router
 from app.config import settings
@@ -81,6 +82,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.include_router(connection_router)
+app.include_router(hardware_router)
 app.include_router(robot_router)
 app.include_router(ws_router)
 

@@ -11,6 +11,7 @@
 #include "common_inc.h"
 #include "configurations.h"
 #include "Platform/Utils/st_hardware.h"
+#include <can.h>
 #include <tim.h>
 #include <cstring>
 
@@ -119,6 +120,7 @@ void Main()
 
     for (;;)
     {
+        CAN_Service();
         // 主循环：编码器校准轮询 + EEPROM 提交 / 恢复检查
 //        if ( encoderCalibrator.FlashRun() == 0)
             encoderCalibrator.TickMainLoop();
